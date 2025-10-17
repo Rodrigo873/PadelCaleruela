@@ -24,19 +24,21 @@ public class PostController {
         this.userService = us;
     }
 
+    // 🔹 Feed de amigos
     @GetMapping("/feed/{userId}")
-    public List<PostDTO> getFeed(@PathVariable Long userId) {
-        return postService.getFeed(userId);
+    public ResponseEntity<List<PostDTO>> getFeed(@PathVariable Long userId) {
+        return ResponseEntity.ok(postService.getFeed(userId));
     }
 
+    // 🔹 Feed público
     @GetMapping("/feed/public")
     public ResponseEntity<List<PostDTO>> getPublicFeed() {
-        List<PostDTO> publicPosts = postService.getPublicFeed();
-        return ResponseEntity.ok(publicPosts);
+        return ResponseEntity.ok(postService.getPublicFeed());
     }
 
+    // 🔹 Crear post
     @PostMapping
-    public PostDTO create(@RequestBody PostDTO postDTO) {
-        return postService.createPost(postDTO);
+    public ResponseEntity<PostDTO> create(@RequestBody PostDTO postDTO) {
+        return ResponseEntity.ok(postService.createPost(postDTO));
     }
 }

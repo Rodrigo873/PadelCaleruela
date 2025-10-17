@@ -11,17 +11,25 @@ import java.util.List;
 
 public interface PostRepository extends JpaRepository<Post, Long> {
 
-    @Query("""
-    SELECT p FROM Post p
-    WHERE p.visibility = com.example.PadelCaleruela.model.Visibility.PUBLIC
-       OR p.user.id IN (
-           SELECT f.friend.id FROM Friendship f WHERE f.user.id = :userId
-       )
-    ORDER BY p.createdAt DESC
-""")
-    List<Post> findFeedForUser(Long userId);
-
+    // 🔹 Posts públicos
     List<Post> findByVisibility(Visibility visibility);
+
+    // 🔹 Posts de los amigos (usuarios con amistad aceptada)
+    @Query("""
+        SELECT p FROM Post p
+        WHERE p.user.id IN (
+            SELECT CASE
+                WHEN f.user.id = :userId THEN f.friend.id
+                ELSE f.user.id
+            END
+            FROM Friendship f
+            WHERE (f.user.id = :userId OR f.friend.id = :userId)
+            AND f.status = com.example.PadelCaleruela.model.FriendshipStatus.ACCEPTED
+        )
+        OR p.user.id = :userId
+        ORDER BY p.createdAt DESC
+    """)
+    List<Post> findFeedForUser(@Param("userId") Long userId);
 
 
 }

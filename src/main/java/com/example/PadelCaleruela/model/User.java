@@ -24,7 +24,7 @@ public class User {
 
     private String fullName;
 
-    @Column(nullable=false)
+    @Column(unique=true, nullable=false)
     private String email;
 
     private LocalDateTime createdAt;
@@ -37,9 +37,10 @@ public class User {
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<Post> posts;
 
-    @OneToMany(mappedBy = "fromUser", cascade = CascadeType.ALL)
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private Set<Friendship> sentRequests = new HashSet<>();
 
-    @OneToMany(mappedBy = "toUser", cascade = CascadeType.ALL)
+    @OneToMany(mappedBy = "friend", cascade = CascadeType.ALL)
     private Set<Friendship> receivedRequests = new HashSet<>();
+
 }

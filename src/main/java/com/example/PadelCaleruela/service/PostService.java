@@ -8,6 +8,7 @@ import com.example.PadelCaleruela.repository.PostRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -23,6 +24,7 @@ public class PostService {
         this.userRepository=userRepository;
     }
 
+    // 🔹 Feed personalizado: posts de amigos + propios
     public List<PostDTO> getFeed(Long userId) {
         List<Post> posts = postRepository.findFeedForUser(userId);
         return posts.stream()
@@ -30,22 +32,7 @@ public class PostService {
                 .collect(Collectors.toList());
     }
 
-    public PostDTO createPost(PostDTO postDTO) {
-        Optional<User> user = userRepository.findById(postDTO.getUserId());
-        if (user.isEmpty()){
-            throw new RuntimeException("El usuario que ha creado el post no existe");
-        }
-        Post post = new Post();
-        post.setUser(user.get());
-        post.setMessage(postDTO.getMessage());
-        post.setMatchResult(postDTO.getMatchResult());
-        post.setVisibility(postDTO.getVisibility());
-        post.setCreatedAt(postDTO.getCreatedAt());
-        Post post1=postRepository.save(post);
-        return convertToDTO(post1);
-    }
-
-
+    // 🔹 Feed público: visible para cualquiera
     public List<PostDTO> getPublicFeed() {
         List<Post> posts = postRepository.findByVisibility(Visibility.PUBLIC);
         return posts.stream()
@@ -53,6 +40,23 @@ public class PostService {
                 .collect(Collectors.toList());
     }
 
+    // 🔹 Crear post
+    public PostDTO createPost(PostDTO postDTO) {
+        User user = userRepository.findById(postDTO.getUserId())
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
+
+        Post post = new Post();
+        post.setUser(user);
+        post.setMessage(postDTO.getMessage());
+        post.setMatchResult(postDTO.getMatchResult());
+        post.setVisibility(postDTO.getVisibility() != null ? postDTO.getVisibility() : Visibility.PUBLIC);
+        post.setCreatedAt(LocalDateTime.now());
+
+        Post saved = postRepository.save(post);
+        return convertToDTO(saved);
+    }
+
+    // 🔹 Conversión entidad → DTO
     private PostDTO convertToDTO(Post post) {
         PostDTO dto = new PostDTO();
         dto.setId(post.getId());

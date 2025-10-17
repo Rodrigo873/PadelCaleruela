@@ -1,20 +1,13 @@
 package com.example.PadelCaleruela.dto;
 
-import com.example.PadelCaleruela.model.FriendshipStatus;
 import lombok.Data;
-
 import java.time.LocalDateTime;
 
 @Data
-public class FriendshipDTO {
+public class ReservationDTO {
     private Long id;
-
     private Long userId;
-
-    private Long friendId;
-
-    private FriendshipStatus status;
-
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
     private LocalDateTime createdAt;
-
 }

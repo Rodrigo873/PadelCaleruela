@@ -1,5 +1,6 @@
 package com.example.PadelCaleruela.controller;
 
+import com.example.PadelCaleruela.dto.FriendshipDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
 import com.example.PadelCaleruela.service.FriendshipService;
 import org.springframework.http.ResponseEntity;
@@ -27,16 +28,30 @@ public class FriendshipController {
 
     // Aceptar solicitud
     @PostMapping("/accept")
-    public ResponseEntity<?> acceptRequest(@RequestParam Long friendshipId) {
-        friendshipService.acceptFriendRequest(friendshipId);
+    public ResponseEntity<?> acceptRequest(@RequestParam Long user,@RequestParam Long friend) {
+        friendshipService.acceptFriendRequest(user,friend);
         return ResponseEntity.ok("Solicitud aceptada");
     }
 
+    //Rechazar solicitud
+    @PostMapping("/reject")
+    public ResponseEntity<?> rejectRequest(@RequestParam Long user,@RequestParam Long friend) {
+        friendshipService.rejectFriendRequest(user,friend);
+        return ResponseEntity.ok("Solicitud rechazada");
+    }
+
+
     // Eliminar amigo
     @DeleteMapping("/{friendshipId}")
-    public ResponseEntity<?> deleteFriendship(@PathVariable Long friendshipId) {
-        friendshipService.removeFriendship(friendshipId);
+    public ResponseEntity<?> deleteFriendship(@RequestParam Long user,@RequestParam Long friend) {
+        friendshipService.removeFriendship(user,friend);
         return ResponseEntity.ok("Amigo eliminado");
+    }
+
+    //Listar solicitudes pendientes
+    @GetMapping("/pending/{userId}")
+    public List<FriendshipDTO> getPendingRequests(@PathVariable Long userId) {
+        return friendshipService.getPendingRequests(userId);
     }
 
     // Listar amigos de un usuario
