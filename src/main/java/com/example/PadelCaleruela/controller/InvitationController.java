@@ -1,0 +1,42 @@
+package com.example.PadelCaleruela.controller;
+
+import com.example.PadelCaleruela.dto.InvitationDTO;
+import com.example.PadelCaleruela.model.*;
+import com.example.PadelCaleruela.repository.InvitationRepository;
+import com.example.PadelCaleruela.repository.UserRepository;
+import com.example.PadelCaleruela.service.InvitationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.security.Principal;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/invitations")
+@RequiredArgsConstructor
+public class InvitationController {
+
+    private final InvitationRepository invitationRepository;
+    private final UserRepository userRepository;
+    private final InvitationService invitationService;
+
+    @GetMapping("/pending/{userId}")
+    public List<InvitationDTO> getPendingInvitations(@PathVariable Long userId) {
+        return invitationService.getPendingInvitations(userId);
+    }
+
+    @PutMapping("/{invitationId}/respond")
+    public ResponseEntity<String> respondInvitation(
+            @PathVariable Long invitationId,
+            @RequestParam String response,
+            Principal principal) {
+
+        String username = principal.getName();
+        String message = invitationService.respondToInvitation(invitationId, response, username);
+        return ResponseEntity.ok(message);
+    }
+
+
+}
+

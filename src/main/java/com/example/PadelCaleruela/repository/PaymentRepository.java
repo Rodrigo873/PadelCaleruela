@@ -9,4 +9,7 @@ import java.util.List;
 public interface PaymentRepository extends JpaRepository<Payment, Long> {
     List<Payment> findByUser_Id(Long userId);
     boolean existsByReservation_Id(Long reservationId);
+    Payment findByReservation_Id(Long reservationId);
+
+
 }

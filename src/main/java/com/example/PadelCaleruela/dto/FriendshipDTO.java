@@ -17,4 +17,8 @@ public class FriendshipDTO {
 
     private LocalDateTime createdAt;
 
+    private String senderUsername;
+    private String senderProfileImageUrl;
+    private Long senderId;
+
 }

@@ -42,6 +42,22 @@ public class Payment {
     @Column
     private String paymentReference; // id de pasarela (client_secret, orderId, etc.)
 
+    // Payment.java
+    @Column
+    private String paymentIntentId;  // id real de Stripe
+
+    @Column
+    private String paymentMethodId;  // último PM usado (snapshot)
+
+    @Column
+    private String providerReceiptUrl; // URL recibo Stripe (útil para soporte)
+
+    @Column
+    private String cardBrand;  // snapshot para mostrar al user
+    @Column
+    private String cardLast4;
+
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

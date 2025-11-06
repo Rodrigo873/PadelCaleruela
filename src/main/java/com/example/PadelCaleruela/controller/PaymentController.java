@@ -25,11 +25,13 @@ public class PaymentController {
         return ResponseEntity.ok(paymentService.createCheckout(request));
     }
 
+    /*
     // 2) Confirmar resultado (simulado)
     @PostMapping("/confirm")
     public ResponseEntity<PaymentDTO> confirm(@RequestBody ConfirmPaymentRequest request) {
         return ResponseEntity.ok(paymentService.confirmPayment(request));
     }
+    */
 
     // 3) Listar mis pagos
     @GetMapping("/mine/{userId}")

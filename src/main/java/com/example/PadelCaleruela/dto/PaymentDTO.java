@@ -18,4 +18,13 @@ public class PaymentDTO {
     private String currency;
     private String paymentReference;
     private LocalDateTime createdAt;
+
+    // PaymentDTO.java  (añadiendo)
+    private String clientSecret;      // para el primer paso
+    private String paymentIntentId;
+    private String paymentMethodId;
+    private String providerReceiptUrl;
+    private String cardBrand;
+    private String cardLast4;
+
 }

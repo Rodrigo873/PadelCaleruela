@@ -10,4 +10,6 @@ public class UserDTO {
     private String fullName;
     private String email;
     private LocalDateTime createdAt;
+    private String profileImageUrl;
+    private String status;
 }
