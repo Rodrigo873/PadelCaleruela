@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface LeagueRankingRepository extends JpaRepository<LeagueRanking, Long> {
+    void deleteAllByLeague(League league);
+
     List<LeagueRanking> findByLeagueOrderByPointsDescMatchesWonDesc(League league);
     Optional<LeagueRanking> findByLeagueAndPlayer(League league, User player);
 }

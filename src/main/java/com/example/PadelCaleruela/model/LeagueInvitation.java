@@ -25,12 +25,14 @@ public class LeagueInvitation {
     @JoinColumn(name = "receiver_id", nullable = false)
     private User receiver;
 
+
+    @Enumerated(EnumType.STRING)
+    private LeagueInvitationType type; // 👈 NUEVO: tipo de invitación
+
+
     @Enumerated(EnumType.STRING)
     private InvitationStatus status = InvitationStatus.PENDING;
 
     private LocalDateTime sentAt = LocalDateTime.now();
 
-    public enum InvitationStatus {
-        PENDING, ACCEPTED, REJECTED
-    }
 }

@@ -17,6 +17,19 @@ public interface InvitationRepository extends JpaRepository<Invitation, Long> {
     List<Invitation> findByReceiverAndStatus(User receiver, InvitationStatus status);
     List<Invitation> findByReservationId(Long reservationId);
 
+    Optional<Invitation> findByReservationAndReceiver(Reservation reservation, User receiver);
+    // Última invitación PENDING de ese usuario para esa reserva (por si hubiese varias históricas)
+    Optional<Invitation> findTopByReservation_IdAndReceiver_IdAndStatusOrderByIdDesc(
+            Long reservationId,
+            Long receiverId,
+            InvitationStatus status
+    );
+
+    Optional<Invitation> findByReservationIdAndReceiverId(Long reservationId, Long receiverId);
+
+    List<Invitation> findAllByReservationIdAndReceiverIdOrderByCreatedAtAsc(Long reservationId, Long receiverId);
+
+
     List<Invitation> findByReceiver_IdAndStatus(Long userId, InvitationStatus status);
 
     @Modifying

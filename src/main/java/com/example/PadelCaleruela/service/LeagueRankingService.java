@@ -54,36 +54,60 @@ public class LeagueRankingService {
         LeagueMatch match = matchRepository.findById(matchId)
                 .orElseThrow(() -> new RuntimeException("Match not found"));
 
-        if (match.getStatus() != MatchStatus.FINISHED) return;
+        if (match.getStatus() != MatchStatus.FINISHED) {
+            return; // Solo actualizar si el partido terminó
+        }
 
         League league = match.getLeague();
 
-        // Determinar ganador y perdedor
+        if (match.getTeam1() == null || match.getTeam2() == null) {
+            throw new RuntimeException("Teams not assigned to match");
+        }
+
+        // 🔹 Obtener los equipos y sus jugadores
+        Set<User> team1Players = match.getTeam1().getPlayers();
+        Set<User> team2Players = match.getTeam2().getPlayers();
+
+        // 🔹 Determinar ganador
         boolean team1Wins = match.getTeam1Score() != null && match.getTeam2Score() != null
                 && match.getTeam1Score() > match.getTeam2Score();
+        boolean draw = match.getTeam1Score() != null && match.getTeam2Score() != null
+                && match.getTeam1Score().equals(match.getTeam2Score());
 
-        Set<User> team1 = match.getTeam1Players();
-        Set<User> team2 = match.getTeam2Players();
+        // 🔹 Puntos por resultado (puedes ajustar si hay empates)
+        int team1Points = team1Wins ? 3 : (draw ? 1 : 0);
+        int team2Points = !team1Wins ? (draw ? 1 : 3) : 0;
 
-        // Actualizar estadísticas de cada jugador
-        updatePlayers(team1, league, team1Wins ? 3 : 0, team1Wins);
-        updatePlayers(team2, league, !team1Wins ? 3 : 0, !team1Wins);
+        // 🔹 Actualizar ranking de cada jugador
+        updatePlayers(team1Players, league, team1Points, team1Wins, draw);
+        updatePlayers(team2Players, league, team2Points, !team1Wins && !draw, draw);
     }
-
-    private void updatePlayers(Set<User> players, League league, int pointsEarned, boolean won) {
+    private void updatePlayers(Set<User> players, League league, int pointsEarned, boolean won, boolean draw) {
         for (User player : players) {
             LeagueRanking ranking = rankingRepository
                     .findByLeagueAndPlayer(league, player)
-                    .orElseThrow(() -> new RuntimeException("Ranking not found for player " + player.getId()));
+                    .orElseGet(() -> {
+                        LeagueRanking newRank = new LeagueRanking();
+                        newRank.setLeague(league);
+                        newRank.setPlayer(player);
+                        newRank.setMatchesPlayed(0);
+                        newRank.setMatchesWon(0);
+                        newRank.setMatchesLost(0);
+                        newRank.setPoints(0);
+                        newRank.setSetsWon(0);
+                        newRank.setSetsLost(0);
+                        return rankingRepository.save(newRank);
+                    });
 
             ranking.setMatchesPlayed(ranking.getMatchesPlayed() + 1);
+
             if (won) {
                 ranking.setMatchesWon(ranking.getMatchesWon() + 1);
-            } else {
+            } else if (!draw) {
                 ranking.setMatchesLost(ranking.getMatchesLost() + 1);
             }
-            ranking.setPoints(ranking.getPoints() + pointsEarned);
 
+            ranking.setPoints(ranking.getPoints() + pointsEarned);
             rankingRepository.save(ranking);
         }
     }

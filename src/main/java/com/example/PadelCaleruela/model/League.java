@@ -25,7 +25,8 @@ public class League {
     @Column(length = 1000)
     private String description;
 
-    private boolean isPublic;
+    @Column(name = "is_public")
+    private Boolean isPublic = true;
 
     private String imageUrl;
 
@@ -57,6 +58,19 @@ public class League {
     // --- Relación con partidos ---
     @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<LeagueMatch> matches = new ArrayList<>();
+
+    @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<LeagueTeam> teams = new HashSet<>();
+
+    @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<LeagueRanking> rankings = new HashSet<>();
+
+    @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<LeagueTeamRanking> teamRankings = new HashSet<>();
+
+    @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<LeagueInvitation> invitations = new HashSet<>();
+
 
 
     // --- Métodos auxiliares ---

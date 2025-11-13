@@ -36,6 +36,11 @@ public class Reservation {
     @ToString.Exclude
     private Set<User> jugadores = new HashSet<>();
 
+    @OneToMany(mappedBy = "reservation", cascade = CascadeType.ALL, orphanRemoval = true)
+    @ToString.Exclude
+    private Set<Invitation> invitations = new HashSet<>();
+
+
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private LocalDateTime createdAt;
@@ -62,4 +67,12 @@ public class Reservation {
     public boolean isFull() {
         return jugadores.size() >= 4;
     }
+
+    public boolean isPlayerRejected(User user) {
+        return invitations.stream()
+                .anyMatch(inv ->
+                        inv.getReceiver().getId().equals(user.getId()) &&
+                                inv.getStatus() == InvitationStatus.REJECTED);
+    }
+
 }

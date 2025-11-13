@@ -2,11 +2,11 @@ package com.example.PadelCaleruela.service;
 
 
 import com.example.PadelCaleruela.dto.InfoUserDTO;
+import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
-import com.example.PadelCaleruela.model.Role;
-import com.example.PadelCaleruela.model.User;
-import com.example.PadelCaleruela.model.UserStatus;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.FriendshipRepository;
+import com.example.PadelCaleruela.repository.LeagueRepository;
 import com.example.PadelCaleruela.repository.ReservationRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
 import jakarta.mail.MessagingException;
@@ -34,16 +34,19 @@ public class UserService {
     private final ReservationRepository reservationRepository;
     private final EmailService emailService;
 
+    private final LeagueRepository leagueRepository;
+
     private static final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/profile-images/";
 
 
     public UserService(UserRepository repo,BCryptPasswordEncoder passwordEncoder,FriendshipRepository friendshipRepository,
-                       ReservationRepository reservationRepository,EmailService emailService) {
+                       ReservationRepository reservationRepository,EmailService emailService,LeagueRepository leagueRepository) {
         this.userRepository = repo;
         this.passwordEncoder=passwordEncoder;
         this.friendshipRepository=friendshipRepository;
         this.reservationRepository=reservationRepository;
         this.emailService=emailService;
+        this.leagueRepository=leagueRepository;
     }
 
     public List<UserDTO> getAllUsers() {
@@ -332,6 +335,33 @@ public class UserService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Devuelve todos los usuarios que NO estén inscritos en una liga específica.
+     */
+    public List<PlayerInfoDTO> getAvailableUsersForLeague(Long leagueId) {
+        League league = leagueRepository.findById(leagueId)
+                .orElseThrow(() -> new RuntimeException("League not found"));
+
+        // 🔹 IDs de los jugadores ya inscritos en la liga
+        Set<Long> playerIdsInLeague = league.getPlayers()
+                .stream()
+                .map(User::getId)
+                .collect(Collectors.toSet());
+
+        // 🔹 Filtramos solo los usuarios activos y que no estén en la liga
+        return userRepository.findAll().stream()
+                .filter(u -> "ACTIVE".equalsIgnoreCase(u.getStatus().toString()))              // 👈 solo usuarios activos
+                .filter(u -> !playerIdsInLeague.contains(u.getId()))               // 👈 que no estén en la liga
+                .map(u -> new PlayerInfoDTO(
+                        u.getId(),
+                        u.getUsername(),
+                        u.getProfileImageUrl(),
+                        false
+                ))
+                .collect(Collectors.toList());
+    }
+
+
 
     // 🔹 Eliminar usuario
     public boolean deleteUser(Long id) {
@@ -361,6 +391,43 @@ public class UserService {
                 .map(this::toDTO)
                 .toList();
     }
+
+    @Transactional()
+    public List<PlayerInfoDTO> getAvailablePlayersForReservation(Long reservationId, Long requesterId) {
+        Reservation reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new RuntimeException("Reserva no encontrada"));
+
+        // 1️⃣ Jugadores ya en la reserva
+        Set<Long> jugadoresActuales = reservation.getJugadores().stream()
+                .map(User::getId)
+                .collect(Collectors.toSet());
+
+        // 2️⃣ Usuarios con invitaciones REJECTED o PENDING (no los queremos mostrar)
+        Set<Long> excluidosPorInvitacion = reservation.getInvitations().stream()
+                .filter(inv -> inv.getStatus() != InvitationStatus.ACCEPTED)
+                .map(inv -> inv.getReceiver().getId())
+                .collect(Collectors.toSet());
+
+        // 3️⃣ Combinar exclusiones
+        Set<Long> excluidos = new HashSet<>();
+        excluidos.addAll(jugadoresActuales);
+        excluidos.addAll(excluidosPorInvitacion);
+        excluidos.add(reservation.getUser().getId()); // el creador tampoco se muestra
+
+        // 4️⃣ Devolver todos los usuarios que no estén excluidos
+        return userRepository.findAll().stream()
+                .filter(u -> !excluidos.contains(u.getId()))
+                .map(u -> new PlayerInfoDTO(
+                        u.getId(),
+                        u.getUsername(),
+                        u.getProfileImageUrl() != null
+                                ? u.getProfileImageUrl()
+                                : "https://ui-avatars.com/api/?name=" + u.getUsername(),
+                        false
+                ))
+                .toList();
+    }
+
 
     public User updateProfileImage(Long userId, String imageUrl) {
         User user = userRepository.findById(userId)

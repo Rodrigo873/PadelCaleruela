@@ -11,7 +11,7 @@ public class LeagueDTO {
     private Long id;
     private String name;
     private String description;
-    private boolean isPublic;
+    private Boolean isPublic;
     private String imageUrl;
     private LocalDate registrationDeadline;
     private LocalDate startDate;

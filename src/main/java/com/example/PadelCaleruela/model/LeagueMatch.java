@@ -3,6 +3,8 @@ package com.example.PadelCaleruela.model;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -11,6 +13,8 @@ import java.util.Set;
 @Entity
 @Data
 @Table(name = "league_matches")
+@EqualsAndHashCode(exclude = {"sets", "league", "team1", "team2"})
+@ToString(exclude = {"sets", "league", "team1", "team2"})
 public class LeagueMatch {
 
     @Id
@@ -32,21 +36,20 @@ public class LeagueMatch {
     private Integer team2Score;
 
     // --- Equipos (cada equipo con 2 jugadores) ---
-    @ManyToMany
-    @JoinTable(
-            name = "league_match_team1",
-            joinColumns = @JoinColumn(name = "match_id"),
-            inverseJoinColumns = @JoinColumn(name = "player_id")
-    )
-    private Set<User> team1Players = new HashSet<>();
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team1_id")
+    private LeagueTeam team1;
 
-    @ManyToMany
-    @JoinTable(
-            name = "league_match_team2",
-            joinColumns = @JoinColumn(name = "match_id"),
-            inverseJoinColumns = @JoinColumn(name = "player_id")
-    )
-    private Set<User> team2Players = new HashSet<>();
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team2_id")
+    private LeagueTeam team2;
+
+    @OneToMany(mappedBy = "match", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<LeagueMatchSet> sets = new HashSet<>();
+
+
+    private Integer jornada;
+
 
     // --- Métodos de ayuda ---
     public boolean isCompleted() {

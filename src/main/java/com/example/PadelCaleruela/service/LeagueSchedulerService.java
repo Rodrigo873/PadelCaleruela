@@ -1,12 +1,11 @@
 package com.example.PadelCaleruela.service;
 
 
-import com.example.PadelCaleruela.model.League;
-import com.example.PadelCaleruela.model.LeagueMatch;
-import com.example.PadelCaleruela.model.MatchStatus;
-import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.LeagueMatchRepository;
 import com.example.PadelCaleruela.repository.LeagueRepository;
+import com.example.PadelCaleruela.repository.LeagueTeamRepository;
+import com.example.PadelCaleruela.util.Pair;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,10 +19,13 @@ public class LeagueSchedulerService {
 
     private final LeagueRepository leagueRepository;
     private final LeagueMatchRepository matchRepository;
+    private final LeagueTeamRepository teamRepository;
 
-    public LeagueSchedulerService(LeagueRepository leagueRepository, LeagueMatchRepository matchRepository) {
+    public LeagueSchedulerService(LeagueRepository leagueRepository, LeagueMatchRepository matchRepository,
+                                  LeagueTeamRepository leagueTeamRepository) {
         this.leagueRepository = leagueRepository;
         this.matchRepository = matchRepository;
+        this.teamRepository=leagueTeamRepository;
     }
 
     @Transactional
@@ -31,45 +33,95 @@ public class LeagueSchedulerService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        List<User> players = new ArrayList<>(league.getPlayers());
-
-        if (players.size() < 4) {
-            throw new RuntimeException("Se necesitan al menos 4 jugadores para generar una liga (2 parejas).");
+        List<LeagueTeam> teams = teamRepository.findByLeague(league);
+        if (teams.size() < 2) {
+            throw new RuntimeException("Se necesitan al menos 2 equipos para generar partidos.");
         }
 
-        // Crear todas las combinaciones posibles de parejas (2 jugadores)
-        List<Set<User>> pairs = generatePairs(players);
+        // 🔹 Generar calendario (ida y vuelta)
+        List<List<Pair<LeagueTeam, LeagueTeam>>> jornadas = generateRoundRobin(teams, true); // true = con vuelta
 
-        // Crear todos los enfrentamientos posibles entre parejas distintas
-        List<Pair<Set<User>, Set<User>>> matchups = generateMatchups(pairs);
+        LocalDateTime start = league.getStartDate() != null
+                ? league.getStartDate().atTime(18, 0)
+                : LocalDateTime.now().plusDays(1).withHour(18).withMinute(0);
 
-        // Distribuir fechas orientativas entre la fecha de inicio y fin de la liga
-        LocalDateTime start = league.getStartDate().atTime(18, 0);
-        LocalDateTime end = league.getEndDate() != null
-                ? league.getEndDate().atTime(18, 0)
-                : start.plusWeeks(matchups.size());
-        long totalDays = ChronoUnit.DAYS.between(start, end);
-        long spacing = Math.max(totalDays / matchups.size(), 2); // mínimo 2 días entre partidos
+        long spacing = 7; // una jornada por semana
 
-        List<LeagueMatch> createdMatches = new ArrayList<>();
-        int i = 0;
+        List<LeagueMatch> created = new ArrayList<>();
 
-        for (Pair<Set<User>, Set<User>> matchup : matchups) {
-            LeagueMatch match = new LeagueMatch();
-            match.setLeague(league);
-            match.setTeam1Players(matchup.getFirst());
-            match.setTeam2Players(matchup.getSecond());
-            match.setStatus(MatchStatus.SCHEDULED);
+        for (int j = 0; j < jornadas.size(); j++) {
+            List<Pair<LeagueTeam, LeagueTeam>> jornada = jornadas.get(j);
+            for (Pair<LeagueTeam, LeagueTeam> matchPair : jornada) {
+                LeagueMatch match = new LeagueMatch();
+                match.setLeague(league);
+                match.setTeam1(matchPair.getFirst());
+                match.setTeam2(matchPair.getSecond());
+                match.setStatus(MatchStatus.SCHEDULED);
+                match.setJornada(j + 1);
+                match.setScheduledDate(start.plusDays(j * spacing));
 
-            // Fecha orientativa
-            match.setScheduledDate(start.plusDays(i * spacing));
-
-            matchRepository.save(match);
-            createdMatches.add(match);
-            i++;
+                created.add(matchRepository.save(match));
+            }
         }
 
-        return createdMatches;
+        return created;
+    }
+
+    private List<List<Pair<LeagueTeam, LeagueTeam>>> generateRoundRobin(List<LeagueTeam> teams, boolean includeReturnLegs) {
+        int numTeams = teams.size();
+        boolean odd = (numTeams % 2 != 0);
+        if (odd) {
+            teams.add(null); // equipo "fantasma" para equilibrar
+            numTeams++;
+        }
+
+        List<List<Pair<LeagueTeam, LeagueTeam>>> jornadas = new ArrayList<>();
+        int numRounds = numTeams - 1;
+
+        for (int round = 0; round < numRounds; round++) {
+            List<Pair<LeagueTeam, LeagueTeam>> matches = new ArrayList<>();
+            for (int i = 0; i < numTeams / 2; i++) {
+                LeagueTeam home = teams.get(i);
+                LeagueTeam away = teams.get(numTeams - 1 - i);
+                if (home != null && away != null) {
+                    matches.add(Pair.of(home, away));
+                }
+            }
+            jornadas.add(matches);
+
+            // rotar equipos (excepto el primero)
+            LeagueTeam fixed = teams.get(0);
+            List<LeagueTeam> rotating = new ArrayList<>(teams.subList(1, teams.size()));
+            Collections.rotate(rotating, 1);
+            teams = new ArrayList<>();
+            teams.add(fixed);
+            teams.addAll(rotating);
+        }
+
+        // 🔁 Generar vuelta (ida y vuelta)
+        if (includeReturnLegs) {
+            List<List<Pair<LeagueTeam, LeagueTeam>>> vuelta = jornadas.stream()
+                    .map(roundList -> roundList.stream()
+                            .map(p -> Pair.of(p.getSecond(), p.getFirst()))
+                            .toList())
+                    .toList();
+            jornadas.addAll(vuelta);
+        }
+
+        return jornadas;
+    }
+
+
+    /** Genera todos los emparejamientos únicos (round-robin simple) entre equipos. */
+    private List<Pair<LeagueTeam, LeagueTeam>> generateTeamMatchups(List<LeagueTeam> teams) {
+        List<Pair<LeagueTeam, LeagueTeam>> result = new ArrayList<>();
+        int n = teams.size();
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                result.add(new Pair<>(teams.get(i), teams.get(j)));
+            }
+        }
+        return result;
     }
 
     private List<Set<User>> generatePairs(List<User> players) {
@@ -98,17 +150,4 @@ public class LeagueSchedulerService {
         return matchups;
     }
 
-    // Clase simple para manejar pares genéricos
-    private static class Pair<A, B> {
-        private final A first;
-        private final B second;
-
-        public Pair(A first, B second) {
-            this.first = first;
-            this.second = second;
-        }
-
-        public A getFirst() { return first; }
-        public B getSecond() { return second; }
-    }
 }

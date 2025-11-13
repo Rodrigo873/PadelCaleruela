@@ -1,5 +1,6 @@
 package com.example.PadelCaleruela.dto;
 
+import com.example.PadelCaleruela.model.LeagueInvitationType;
 import lombok.Data;
 import java.time.LocalDateTime;
 
@@ -12,6 +13,7 @@ public class LeagueInvitationDTO {
     private String senderName;
     private Long receiverId;
     private String receiverName;
+    private LeagueInvitationType type;
     private String status;
     private LocalDateTime sentAt;
 }

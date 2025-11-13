@@ -21,6 +21,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     boolean existsByTimeRange(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
 
     List<Reservation> findByUserOrderByStartTimeDesc(User user);
+    Optional<Reservation> findFirstByStartTimeAndStatusNotAndIsPublicTrue(
+            LocalDateTime startTime, ReservationStatus status);
 
     @Query("SELECT r FROM Reservation r WHERE r.paid = false AND r.createdAt < :limit AND r.status = com.example.PadelCaleruela.model.ReservationStatus.PENDING")
     List<Reservation> findByPaidFalseAndCreatedAtBefore(@Param("limit") LocalDateTime limit);

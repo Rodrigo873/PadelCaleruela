@@ -7,8 +7,11 @@ import com.example.PadelCaleruela.repository.PaymentRepository;
 import com.example.PadelCaleruela.repository.ReservationRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
 import jakarta.mail.MessagingException;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,20 +32,19 @@ public class ReservationService {
     private final InvitationRepository invitationRepository;
     private final PaymentRepository paymentRepository;
     private final EmailService emailService;
+    @PersistenceContext
+    private EntityManager entityManager;
 
     // 🔹 Crear reserva con duración fija de 1h30min
+    @Transactional
     public ReservationDTO createReservation(ReservationDTO dto) {
-        System.out.println(dto);
         LocalDateTime start = dto.getStartTime();
         LocalDateTime end = start.plusMinutes(90);
 
-
-
-        // 🔹 Buscar al usuario creador
         User creator = userRepository.findById(dto.getUserId())
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        // 🔹 Crear la nueva reserva
+        // Crear la reserva
         Reservation reservation = new Reservation();
         reservation.setUser(creator);
         reservation.setStartTime(start);
@@ -51,28 +53,14 @@ public class ReservationService {
         reservation.setStatus(ReservationStatus.PENDING);
         reservation.setPublic(dto.isPublic());
 
-        // 🔹 Añadir jugadores (el creador siempre incluido)
+        // Creador siempre incluido
         Set<User> jugadores = new HashSet<>();
         jugadores.add(creator);
-
-        if (dto.getJugadores() != null && !dto.getJugadores().isEmpty()) {
-            List<Long> invitedIds = dto.getJugadores().stream()
-                    .map(UserDTO::getId)
-                    .filter(id -> id != null && !id.equals(creator.getId()))
-                    .toList();
-
-            if (!invitedIds.isEmpty()) {
-                List<User> invitados = userRepository.findAllById(invitedIds);
-                jugadores.addAll(invitados);
-            }
-        }
-
         reservation.setJugadores(jugadores);
 
-        // 🔹 Guardar en base de datos
         Reservation saved = reservationRepository.save(reservation);
 
-        saved.getJugadores().size();
+        // Crear invitaciones iniciales si las hay
         if (dto.getJugadores() != null && !dto.getJugadores().isEmpty()) {
             List<Long> invitedIds = dto.getJugadores().stream()
                     .map(UserDTO::getId)
@@ -81,23 +69,81 @@ public class ReservationService {
 
             if (!invitedIds.isEmpty()) {
                 List<User> invitados = userRepository.findAllById(invitedIds);
-                jugadores.addAll(invitados);
-
-                // Crear invitaciones pendientes
                 for (User invited : invitados) {
                     Invitation inv = new Invitation();
-                    inv.setReservation(reservation);
+                    inv.setReservation(saved);
                     inv.setSender(creator);
                     inv.setReceiver(invited);
                     inv.setStatus(InvitationStatus.PENDING);
+                    inv.setCreatedAt(LocalDateTime.now());
                     invitationRepository.save(inv);
                 }
             }
         }
 
-        // 🔹 Convertir a DTO y devolver
         return toDTO(saved);
     }
+
+    // 🔹 Nuevo método solo para invitar jugadores (sin crear reserva)
+    @Transactional
+    public String inviteToReservation(Long reservationId, Long senderId, List<Long> invitedIds) {
+        Reservation reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new RuntimeException("Reserva no encontrada."));
+
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
+
+        if (!reservation.getUser().getId().equals(senderId)) {
+            throw new RuntimeException("Solo el creador puede invitar jugadores.");
+        }
+
+        if (reservation.getJugadores().size() >= 4) {
+            throw new RuntimeException("La reserva ya está completa (máximo 4 jugadores).");
+        }
+
+        for (Long invitedId : invitedIds) {
+            if (invitedId.equals(senderId)) continue;
+
+            User invited = userRepository.findById(invitedId)
+                    .orElseThrow(() -> new RuntimeException("Jugador no encontrado: " + invitedId));
+
+            // Buscar invitaciones previas
+            List<Invitation> existing = invitationRepository
+                    .findAllByReservationIdAndReceiverIdOrderByCreatedAtAsc(reservationId, invitedId);
+
+            if (!existing.isEmpty()) {
+                Invitation last = existing.get(existing.size() - 1);
+                if (last.getStatus() == InvitationStatus.PENDING) {
+                    continue; // Ya hay una pendiente
+                }
+                last.setStatus(InvitationStatus.PENDING);
+                last.setCreatedAt(LocalDateTime.now());
+                invitationRepository.save(last);
+            } else {
+                Invitation inv = new Invitation();
+                inv.setReservation(reservation);
+                inv.setSender(sender);
+                inv.setReceiver(invited);
+                inv.setStatus(InvitationStatus.PENDING);
+                inv.setCreatedAt(LocalDateTime.now());
+                invitationRepository.save(inv);
+            }
+        }
+
+        return "✅ Invitaciones enviadas correctamente.";
+    }
+
+
+    // Service
+    @Transactional(readOnly = true)
+    public Long findPublicReservationId(LocalDate date, LocalTime time) {
+        LocalDateTime start = LocalDateTime.of(date, time);
+        return reservationRepository
+                .findFirstByStartTimeAndStatusNotAndIsPublicTrue(start, ReservationStatus.CANCELED)
+                .map(Reservation::getId)
+                .orElse(null);
+    }
+
 
     public List<InfoReservationDTO> getAllInfoReservation() {
         return reservationRepository.findAll()
@@ -110,22 +156,24 @@ public class ReservationService {
     // 🔹 Cancelar reservas no pagadas después de 15 minutos
     @Transactional
     public void cancelUnpaidReservations() {
-        LocalDateTime limit = LocalDateTime.now().minusMinutes(15); // margen de 15 min
+        LocalDateTime limit = LocalDateTime.now().minusMinutes(15);
         List<Reservation> toCancel = reservationRepository.findByPaidFalseAndCreatedAtBefore(limit);
 
-        for (Reservation r : toCancel) {
-            // 🧹 Eliminar invitaciones asociadas antes de cancelar
-            invitationRepository.deleteAllByReservationId(r.getId());
+        if (toCancel.isEmpty()) return;
 
-            // ⚙️ Cambiar estado a CANCELADA
+        for (Reservation r : toCancel) {
+            invitationRepository.deleteAllByReservationId(r.getId());
+            if (r.getJugadores() != null) r.getJugadores().clear();
             r.setStatus(ReservationStatus.CANCELED);
         }
 
-        if (!toCancel.isEmpty()) {
-            reservationRepository.saveAll(toCancel);
-            System.out.println("🔸 Canceladas automáticamente " + toCancel.size() + " reservas impagas.");
-        }
+        reservationRepository.saveAll(toCancel);
+        entityManager.flush();
+        entityManager.clear(); // 👈 evita que getAvailableHours vea cache viejo
+
+        System.out.println("🔸 Canceladas automáticamente " + toCancel.size() + " reservas impagas.");
     }
+
 
 
     // 🔹 Ejecutar automáticamente cada 1 minutos
@@ -326,41 +374,120 @@ public class ReservationService {
 
     // 🔹 Devuelve las horas disponibles de un día
     // 🔹 Genera los slots disponibles de un día
-    public List<LocalTime> getAvailableHours(LocalDate date) {
-        // Horario de apertura
+    @Transactional(readOnly = true)
+    public List<HourSlotDTO> getAvailableHours(LocalDate date) {
         LocalTime opening = LocalTime.of(8, 0);
         LocalTime closing = LocalTime.of(23, 0);
 
-        // Crear slots de 1h30min
         List<LocalTime> allSlots = new ArrayList<>();
         for (LocalTime time = opening; time.isBefore(closing); time = time.plusMinutes(90)) {
             allSlots.add(time);
         }
 
-        // Filtrar si es hoy: quitar horas pasadas
-        if (date.equals(LocalDate.now())) {
-            LocalTime now = LocalTime.now();
-            allSlots = allSlots.stream()
-                    .filter(slot -> slot.isAfter(now))
-                    .collect(Collectors.toList());
+        LocalDateTime startOfDay = date.atStartOfDay();
+        LocalDateTime endOfDay   = date.plusDays(1).atStartOfDay();
+
+        List<Reservation> reservations = reservationRepository
+                .findByStartTimeBetween(startOfDay, endOfDay)
+                .stream()
+                .filter(r -> r.getStatus() != ReservationStatus.CANCELED)
+                .toList();
+
+        // ✅ Resolver correctamente el usuario actual (username o email)
+        Long currentUserId = resolveCurrentUserId();
+
+        List<HourSlotDTO> result = new ArrayList<>();
+
+        for (LocalTime slot : allSlots) {
+            Optional<Reservation> reservationOpt = reservations.stream()
+                    .filter(r -> r.getStartTime().toLocalTime().equals(slot))
+                    .findFirst();
+
+            if (reservationOpt.isPresent()) {
+                Reservation reservation = reservationOpt.get();
+
+                String status = switch (reservation.getStatus()) {
+                    case PENDING   -> "PENDING_PAYMENT";
+                    case CONFIRMED -> "PAID";
+                    default        -> "RESERVED";
+                };
+
+                List<PlayerInfoDTO> players = reservation.getJugadores().stream()
+                        .filter(p -> !reservation.isPlayerRejected(p))
+                        .map(p -> {
+                            boolean accepted = invitationRepository
+                                    .findByReservationAndReceiver(reservation, p)
+                                    .map(inv -> inv.getStatus() == InvitationStatus.ACCEPTED)
+                                    .orElse(true); // el creador o jugadores directos siempre true
+
+                            return new PlayerInfoDTO(
+                                    p.getId(),
+                                    p.getUsername(),
+                                    p.getProfileImageUrl() != null ? p.getProfileImageUrl()
+                                            : "https://ui-avatars.com/api/?name=" + p.getUsername(),
+                                    accepted
+                            );
+                        })
+                        .toList();
+
+                boolean esCreador = currentUserId != null
+                        && reservation.getUser() != null
+                        && reservation.getUser().getId().equals(currentUserId);
+
+                HourSlotDTO dto = new HourSlotDTO(slot, status, reservation.isPublic(), players, esCreador,reservation.getId());
+                result.add(dto);
+
+            } else {
+                result.add(new HourSlotDTO(slot, "AVAILABLE", false, List.of(), false, null));
+            }
+
         }
 
-        // Obtener reservas del día
-        LocalDateTime startOfDay = date.atStartOfDay();
-        LocalDateTime endOfDay = date.plusDays(1).atStartOfDay();
-        List<Reservation> reservations = reservationRepository.findByStartTimeBetween(startOfDay, endOfDay);
+        if (date.equals(LocalDate.now())) {
+            LocalTime now = LocalTime.now();
+            result.forEach(slotDto -> {
+                if (slotDto.getTime().isBefore(now)) {
+                    slotDto.setStatus("EXPIRED");
+                }
+            });
+        }
 
-        // Eliminar solo las horas de reservas activas (no canceladas)
-        Set<LocalTime> reservedSlots = reservations.stream()
-                .filter(r -> r.getStatus() != ReservationStatus.CANCELED)
-                .map(r -> r.getStartTime().toLocalTime())
-                .collect(Collectors.toSet());
-
-
-        return allSlots.stream()
-                .filter(slot -> !reservedSlots.contains(slot))
-                .collect(Collectors.toList());
+        return result;
     }
+
+    private Long resolveCurrentUserId() {
+        try {
+            var ctx = SecurityContextHolder.getContext();
+            if (ctx == null) return null;
+
+            var auth = ctx.getAuthentication();
+            if (auth == null || !auth.isAuthenticated()) return null;
+
+            // Evita el "anonymousUser"
+            if ("anonymousUser".equalsIgnoreCase(String.valueOf(auth.getPrincipal()))) {
+                return null;
+            }
+
+            String key;
+            Object principal = auth.getPrincipal();
+
+            if (principal instanceof org.springframework.security.core.userdetails.UserDetails ud) {
+                key = ud.getUsername(); // suele ser username o email según tu UserDetailsService
+            } else {
+                key = auth.getName();   // fallback: lo que ponga el token
+            }
+
+            return userRepository.findByUsernameOrEmail(key)
+                    .map(User::getId)
+                    .orElse(null);
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+
+
 
     //Reservas de usuario
     public List<ReservationDTO> getReservationsByUser(Long userId) {
@@ -626,14 +753,20 @@ public class ReservationService {
             dto.setPublic(res.isPublic());
             dto.setEsCreador(res.getUser().getId().equals(currentUserId));
 
-            dto.setJugadores(res.getJugadores().stream().map(j -> {
-                UserDTO userDTO = new UserDTO();
-                userDTO.setId(j.getId());
-                userDTO.setUsername(j.getUsername());
-                userDTO.setFullName(j.getFullName());
-                userDTO.setProfileImageUrl(j.getProfileImageUrl());
-                return userDTO;
-            }).toList());
+            dto.setJugadores(
+                    res.getJugadores().stream()
+                            .filter(j -> !res.isPlayerRejected(j))
+                            .map(j -> {
+                                UserDTO userDTO = new UserDTO();
+                                userDTO.setId(j.getId());
+                                userDTO.setUsername(j.getUsername());
+                                userDTO.setFullName(j.getFullName());
+                                userDTO.setProfileImageUrl(j.getProfileImageUrl());
+                                return userDTO;
+                            })
+                            .toList()
+            );
+
 
             return dto;
         }).toList();

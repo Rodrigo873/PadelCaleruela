@@ -30,6 +30,13 @@ public class LeagueTeam {
     )
     private Set<User> players = new HashSet<>();
 
+    @OneToMany(mappedBy = "team1")
+    private Set<LeagueMatch> homeMatches = new HashSet<>();
+
+    @OneToMany(mappedBy = "team2")
+    private Set<LeagueMatch> awayMatches = new HashSet<>();
+
+
     // dentro de LeagueTeam.java
     public boolean isFull() {
         return players.size() >= 2;

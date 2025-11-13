@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/invitations")
@@ -35,6 +36,20 @@ public class InvitationController {
         String username = principal.getName();
         String message = invitationService.respondToInvitation(invitationId, response, username);
         return ResponseEntity.ok(message);
+    }
+
+    @GetMapping("/my")
+    public ResponseEntity<?> getMyInvitationForReservation(
+            @RequestParam("reservationId") Long reservationId,
+            Principal principal
+    ) {
+        String principalName = principal.getName(); // username/email según tu auth
+        Long invitationId = invitationService.getMyInvitationIdForReservation(reservationId, principalName);
+
+        if (invitationId == null) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(Map.of("id", invitationId));
     }
 
 

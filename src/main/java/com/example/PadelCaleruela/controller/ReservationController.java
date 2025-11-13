@@ -1,5 +1,6 @@
 package com.example.PadelCaleruela.controller;
 
+import com.example.PadelCaleruela.dto.HourSlotDTO;
 import com.example.PadelCaleruela.dto.InfoReservationDTO;
 import com.example.PadelCaleruela.dto.ReservationDTO;
 import com.example.PadelCaleruela.dto.ReservationPlayerDTO;
@@ -35,6 +36,30 @@ public class ReservationController {
         return ResponseEntity.ok(reservationService.createReservation(dto));
     }
 
+    // 🟣 Invitar jugadores a una reserva existente
+    @PostMapping("/{reservationId}/invite")
+    public ResponseEntity<Map<String, String>> inviteToReservation(
+            @PathVariable Long reservationId,
+            @RequestParam Long senderId,
+            @RequestBody List<Long> invitedIds) {
+
+        String message = reservationService.inviteToReservation(reservationId, senderId, invitedIds);
+        return ResponseEntity.ok(Map.of("message", message));
+    }
+
+
+    // Controller
+    @GetMapping("/reservations/public-id")
+    public ResponseEntity<Long> getPublicReservationId(
+            @RequestParam String date,    // "YYYY-MM-DD"
+            @RequestParam String time     // "HH:mm"
+    ) {
+        Long id = reservationService.findPublicReservationId(LocalDate.parse(date), LocalTime.parse(time));
+        if (id == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(id);
+    }
+
+
     @GetMapping("/infoReservation")
     public List<InfoReservationDTO> getAllInfo() {
         return reservationService.getAllInfoReservation();
@@ -67,15 +92,18 @@ public class ReservationController {
 
     //Horas disponibles de un dia
     @GetMapping("/available")
-    public ResponseEntity<Map<String, Object>> getAvailableSlots(@RequestParam String date) {
+    public ResponseEntity<Map<String, Object>> getDailySlots(@RequestParam String date) {
         LocalDate parsedDate = LocalDate.parse(date);
-        List<LocalTime> available = reservationService.getAvailableHours(parsedDate);
+        List<HourSlotDTO> slots = reservationService.getAvailableHours(parsedDate);
 
         return ResponseEntity.ok(Map.of(
                 "date", parsedDate.toString(),
-                "availableSlots", available
+                "slots", slots
         ));
     }
+
+
+
 
     @GetMapping("/user/{userId}")
     public List<ReservationDTO> getReservationsByUserAndStatus(

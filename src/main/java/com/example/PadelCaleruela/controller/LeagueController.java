@@ -42,11 +42,28 @@ public class LeagueController {
         return leagueService.getActiveLeagues();
     }
 
+    @GetMapping("/user/{userId}/finished")
+    public ResponseEntity<List<LeagueDTO>> getFinishedLeaguesByPlayer(@PathVariable Long userId) {
+        List<LeagueDTO> finishedLeagues = leagueService.getFinishedLeaguesByPlayer(userId);
+        return ResponseEntity.ok(finishedLeagues);
+    }
+
+
     // 🆕 Obtener participantes por parejas
     @GetMapping("/{leagueId}/participants")
     public ResponseEntity<List<LeaguePairDTO>> getLeagueParticipantsGrouped(@PathVariable Long leagueId) {
         List<LeaguePairDTO> participants = leagueService.getLeagueParticipantsGrouped(leagueId);
         return ResponseEntity.ok(participants);
+    }
+
+    // 🔹 Nuevo endpoint
+    @GetMapping("/{leagueId}/isUserInLeague/{userId}")
+    public ResponseEntity<Boolean> isUserInLeague(
+            @PathVariable Long leagueId,
+            @PathVariable Long userId) {
+
+        boolean isInLeague = leagueService.isUserInLeague(leagueId, userId);
+        return ResponseEntity.ok(isInLeague);
     }
 
     @GetMapping("/{id}")

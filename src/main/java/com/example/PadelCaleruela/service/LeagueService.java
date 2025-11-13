@@ -3,14 +3,12 @@ package com.example.PadelCaleruela.service;
 
 import com.example.PadelCaleruela.dto.LeagueDTO;
 import com.example.PadelCaleruela.dto.LeaguePairDTO;
-import com.example.PadelCaleruela.model.League;
-import com.example.PadelCaleruela.model.LeagueStatus;
-import com.example.PadelCaleruela.model.User;
-import com.example.PadelCaleruela.repository.LeagueRepository;
-import com.example.PadelCaleruela.repository.UserRepository;
+import com.example.PadelCaleruela.model.*;
+import com.example.PadelCaleruela.repository.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -20,9 +18,26 @@ public class LeagueService {
     private final LeagueRepository leagueRepository;
     private final UserRepository userRepository;
 
-    public LeagueService(LeagueRepository leagueRepository, UserRepository userRepository) {
+    private final LeagueInvitationRepository leagueInvitationRepository;
+
+    private final LeagueMatchRepository leagueMatchRepository;
+    private final LeagueTeamRepository leagueTeamRepository;
+    private final LeagueRankingRepository leagueRankingRepository;
+    private final LeagueTeamRankingRepository leagueTeamRankingRepository;
+
+    public LeagueService(LeagueRepository leagueRepository, UserRepository userRepository,
+                         LeagueInvitationRepository leagueInvitationRepository,LeagueMatchRepository matchRepository,
+                         LeagueTeamRepository leagueTeamRepository,
+                         LeagueTeamRankingRepository leagueTeamRankingRepository,
+                         LeagueRankingRepository leagueRankingRepository) {
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
+        this.leagueMatchRepository=matchRepository;
+        this.leagueInvitationRepository=leagueInvitationRepository;
+        this.leagueTeamRepository=leagueTeamRepository;
+        this.leagueTeamRankingRepository=leagueTeamRankingRepository;
+        this.leagueRankingRepository=leagueRankingRepository;
+
     }
 
     @Transactional
@@ -30,7 +45,7 @@ public class LeagueService {
         League league = new League();
         league.setName(dto.getName());
         league.setDescription(dto.getDescription());
-        league.setPublic(dto.isPublic());
+        league.setIsPublic(dto.getIsPublic());
         league.setImageUrl(dto.getImageUrl());
         league.setRegistrationDeadline(dto.getRegistrationDeadline());
         league.setStartDate(dto.getStartDate());
@@ -48,12 +63,17 @@ public class LeagueService {
     /**
      * 🔹 Devuelve todas las ligas en las que participa un jugador.
      */
-    @Transactional
+    @Transactional(readOnly = true)
     public List<LeagueDTO> getLeaguesByPlayer(Long playerId) {
         List<League> leagues = leagueRepository.findAll();
 
         return leagues.stream()
                 .filter(l -> {
+                    // ❌ Excluir las ligas finalizadas
+                    if (l.getStatus() == LeagueStatus.FINISHED) {
+                        return false;
+                    }
+
                     // ✅ Ligas creadas por el usuario
                     boolean isCreator = l.getCreator() != null && l.getCreator().getId().equals(playerId);
 
@@ -69,47 +89,106 @@ public class LeagueService {
                 .collect(Collectors.toList());
     }
 
-    /** 🔥 Retorna todas las ligas con estado "ACTIVE" */
-    public List<LeagueDTO> getActiveLeagues() {
-        return leagueRepository.findAll()
-                .stream()
-                .filter(l -> "ACTIVE".equalsIgnoreCase(String.valueOf(l.getStatus())))
+
+    @Transactional(readOnly = true)
+    public List<LeagueDTO> getFinishedLeaguesByPlayer(Long playerId) {
+        List<League> leagues = leagueRepository.findAll();
+
+        return leagues.stream()
+                .filter(l -> {
+                    // ✅ Ligas finalizadas
+                    boolean isFinished = l.getStatus() == LeagueStatus.FINISHED;
+
+                    // ✅ Ligas creadas por el usuario
+                    boolean isCreator = l.getCreator() != null && l.getCreator().getId().equals(playerId);
+
+                    // ✅ Ligas donde el usuario participó
+                    Set<User> players = l.getPlayers();
+                    boolean isPlayer = players != null &&
+                            players.stream().anyMatch(p -> p.getId().equals(playerId));
+
+                    // ✅ Devuelve solo si la liga está finalizada y el usuario participó o la creó
+                    return isFinished && (isCreator || isPlayer);
+                })
                 .map(this::mapToDto)
                 .collect(Collectors.toList());
     }
 
+    /** 🔥 Retorna todas las ligas con estado "ACTIVE" */
+    public List<LeagueDTO> getActiveLeagues() {
+        return leagueRepository.findAllActivePublicLeagues()
+                .stream()
+                .map(this::mapToDto)
+                .collect(Collectors.toList());
+    }
+
+
     // 🆕 Obtener jugadores agrupados por parejas
+    @Transactional(readOnly = true)
     public List<LeaguePairDTO> getLeagueParticipantsGrouped(Long leagueId) {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
 
-        List<User> players = new ArrayList<>(league.getPlayers());
+        // 🔹 1. Obtener todos los equipos con sus jugadores
+        List<LeagueTeam> teams = leagueTeamRepository.findByLeagueIdWithPlayers(leagueId);
+
+        // 🔹 2. Crear DTOs para las parejas (equipos)
         List<LeaguePairDTO> pairs = new ArrayList<>();
 
-        for (int i = 0; i < players.size(); i += 2) {
-            if (i + 1 < players.size()) {
-                pairs.add(new LeaguePairDTO(
-                        Arrays.asList(players.get(i).getId(), players.get(i + 1).getId()),
-                        Arrays.asList(players.get(i).getUsername(), players.get(i + 1).getUsername()),
-                        Arrays.asList(players.get(i).getProfileImageUrl(),players.get(i + 1).getProfileImageUrl())
-                ));
-            } else {
-                pairs.add(new LeaguePairDTO(
-                        Collections.singletonList(players.get(i).getId()),
-                        Collections.singletonList(players.get(i).getUsername()),
-                        Collections.singletonList(players.get(i).getProfileImageUrl())
-                ));
-            }
+        for (LeagueTeam team : teams) {
+            List<User> players = new ArrayList<>(team.getPlayers());
+
+            List<Long> playerIds = players.stream().map(User::getId).toList();
+            List<String> usernames = players.stream().map(User::getUsername).toList();
+            List<String> images = players.stream()
+                    .map(u -> u.getProfileImageUrl() != null ? u.getProfileImageUrl()
+                            : "https://ui-avatars.com/api/?name=" + u.getUsername())
+                    .toList();
+
+            pairs.add(new LeaguePairDTO(playerIds, usernames, images));
+        }
+
+        // 🔹 3. Detectar jugadores sin pareja (inscritos pero no en ningún equipo)
+        Set<Long> playersInTeams = teams.stream()
+                .flatMap(t -> t.getPlayers().stream().map(User::getId))
+                .collect(Collectors.toSet());
+
+        List<User> unpairedPlayers = league.getPlayers().stream()
+                .filter(p -> !playersInTeams.contains(p.getId()))
+                .toList();
+
+        // 🔹 4. Agregar los que están sin pareja
+        for (User p : unpairedPlayers) {
+            pairs.add(new LeaguePairDTO(
+                    List.of(p.getId()),
+                    List.of(p.getUsername()),
+                    List.of(p.getProfileImageUrl() != null
+                            ? p.getProfileImageUrl()
+                            : "https://ui-avatars.com/api/?name=" + p.getUsername())
+            ));
         }
 
         return pairs;
     }
 
 
+
     public List<LeagueDTO> getAllPublicLeagues() {
-        return leagueRepository.findByIsPublicTrue()
-                .stream().map(this::mapToDto).collect(Collectors.toList());
+        return leagueRepository.findAllPublicPendingLeagues()
+                .stream()
+                .map(this::mapToDto)
+                .collect(Collectors.toList());
     }
+
+    @Transactional(readOnly = true)
+    public boolean isUserInLeague(Long leagueId, Long userId) {
+        return leagueRepository.findById(leagueId)
+                .map(league -> league.getPlayers()
+                        .stream()
+                        .anyMatch(user -> user.getId().equals(userId)))
+                .orElse(false);
+    }
+
 
     public LeagueDTO getLeague(Long id) {
         return leagueRepository.findById(id)
@@ -123,9 +202,27 @@ public class LeagueService {
                 .orElseThrow(() -> new RuntimeException("League not found"));
         User player = userRepository.findById(playerId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
-        league.addPlayer(player);
-        leagueRepository.save(league);
+
+        // 🔹 Buscar si hay una invitación pendiente
+        Optional<LeagueInvitation> existingInvitationOpt =
+                leagueInvitationRepository.findByLeague_IdAndReceiver_IdAndStatus(leagueId, playerId, InvitationStatus.PENDING);
+
+        if (existingInvitationOpt.isPresent()) {
+            LeagueInvitation invitation = existingInvitationOpt.get();
+            invitation.setStatus(InvitationStatus.ACCEPTED);
+            leagueInvitationRepository.save(invitation);
+        }
+
+        // 🔹 Evitar duplicados (por si ya está en la liga)
+        boolean alreadyInLeague = league.getPlayers().stream()
+                .anyMatch(p -> p.getId().equals(playerId));
+
+        if (!alreadyInLeague) {
+            league.addPlayer(player);
+            leagueRepository.save(league);
+        }
     }
+
 
     @Transactional
     public void removePlayerFromLeague(Long leagueId, Long playerId) {
@@ -138,13 +235,19 @@ public class LeagueService {
 
     @Transactional
     public boolean deleteLeague(Long leagueId, Long userId) {
-        Optional<League> optLeague = leagueRepository.findById(leagueId);
+        League league = leagueRepository.findById(leagueId)
+                .orElseThrow(() -> new RuntimeException("League not found"));
 
-        if (optLeague.isEmpty()) {
-            return false;
-        }
+        // 1️⃣ Borrar dependencias directas antes de la liga
+        leagueInvitationRepository.deleteAllByLeague(league);
+        leagueMatchRepository.deleteAllByLeague(league);
+        leagueTeamRankingRepository.deleteAllByLeague(league);
+        leagueRankingRepository.deleteAllByLeague(league);
+        leagueTeamRepository.deleteAllByLeague(league);
 
-        League league = optLeague.get();
+        // 2️⃣ Borrar relaciones many-to-many (jugadores en liga)
+        league.getPlayers().clear();
+        leagueRepository.save(league); // sincroniza el cambio
 
         // ✅ Verificar que el usuario es el creador
         if (league.getCreator() != null && league.getCreator().getId().equals(userId)) {
@@ -161,7 +264,7 @@ public class LeagueService {
         dto.setId(league.getId());
         dto.setName(league.getName());
         dto.setDescription(league.getDescription());
-        dto.setPublic(league.isPublic());
+        dto.setIsPublic(league.getIsPublic());
         dto.setImageUrl(league.getImageUrl());
         dto.setRegistrationDeadline(league.getRegistrationDeadline());
         dto.setStartDate(league.getStartDate());

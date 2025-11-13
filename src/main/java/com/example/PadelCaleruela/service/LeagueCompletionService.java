@@ -2,9 +2,11 @@ package com.example.PadelCaleruela.service;
 
 
 import com.example.PadelCaleruela.dto.LeagueTeamRankingDTO;
+import com.example.PadelCaleruela.dto.LeagueTeamRankingViewDTO;
 import com.example.PadelCaleruela.model.League;
 import com.example.PadelCaleruela.model.LeagueStatus;
 import com.example.PadelCaleruela.model.LeagueMatch;
+import com.example.PadelCaleruela.model.MatchStatus;
 import com.example.PadelCaleruela.repository.LeagueMatchRepository;
 import com.example.PadelCaleruela.repository.LeagueRepository;
 import jakarta.mail.MessagingException;
@@ -37,34 +39,52 @@ public class LeagueCompletionService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        if (league.getStatus() == LeagueStatus.FINISHED) {
-            return; // ya finalizada
-        }
+        if (league.getStatus() == LeagueStatus.FINISHED) return;
 
-        // Verificar si todos los partidos están jugados
         List<LeagueMatch> matches = matchRepository.findByLeague(league);
-        boolean allFinished = !matches.isEmpty() &&
-                matches.stream().allMatch(m -> m.getStatus().name().equals("FINISHED"));
+        if (matches.isEmpty()) return;
 
+        boolean allFinished = matches.stream()
+                .allMatch(m -> m.getStatus() == MatchStatus.FINISHED);
         if (!allFinished) return;
 
-        // Cambiar estado a FINISHED
         league.setStatus(LeagueStatus.FINISHED);
         leagueRepository.save(league);
 
-        // Obtener ranking final y campeón
-        List<LeagueTeamRankingDTO> ranking = rankingService.getRanking(leagueId);
-        LeagueTeamRankingDTO champion = ranking.isEmpty() ? null : ranking.get(0);
+        // ✅ Nuevo ranking completo
+        List<LeagueTeamRankingViewDTO> viewRanking = rankingService.getRanking(leagueId);
+        LeagueTeamRankingViewDTO viewChampion = viewRanking.isEmpty() ? null : viewRanking.get(0);
 
-        // Enviar correo HTML al creador
+        // 🔄 Convertir a los tipos antiguos para el email (LeagueTeamRankingDTO)
+        List<LeagueTeamRankingDTO> ranking = viewRanking.stream()
+                .map(v -> new LeagueTeamRankingDTO(
+                        v.getTeamId(),
+                        v.getPlayers().stream().map(p -> p.getUsername()).toList(),
+                        v.getMatchesPlayed(),
+                        v.getMatchesWon(),
+                        v.getMatchesLost(),
+                        v.getPoints()
+                ))
+                .toList();
+
+        LeagueTeamRankingDTO champion = viewChampion == null ? null : new LeagueTeamRankingDTO(
+                viewChampion.getTeamId(),
+                viewChampion.getPlayers().stream().map(p -> p.getUsername()).toList(),
+                viewChampion.getMatchesPlayed(),
+                viewChampion.getMatchesWon(),
+                viewChampion.getMatchesLost(),
+                viewChampion.getPoints()
+        );
+
         try {
             String subject = "🏆 Tu liga '" + league.getName() + "' ha finalizado";
             String html = buildLeagueCompletedEmail(league, champion, ranking);
             emailService.sendHtmlEmail(league.getCreator().getEmail(), subject, html);
         } catch (MessagingException e) {
-            throw new RuntimeException("Error enviando email de finalización: " + e.getMessage());
+            throw new RuntimeException("Error enviando email de finalización: " + e.getMessage(), e);
         }
     }
+
 
     /** 📨 Genera el contenido HTML del correo */
     private String buildLeagueCompletedEmail(League league, LeagueTeamRankingDTO champion, List<LeagueTeamRankingDTO> ranking) {

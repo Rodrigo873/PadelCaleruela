@@ -4,6 +4,7 @@ package com.example.PadelCaleruela.dto;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Set;
 
 @Data
@@ -15,7 +16,8 @@ public class LeagueMatchDTO {
     private String status;
     private Integer team1Score;
     private Integer team2Score;
-    private Set<Long> team1PlayerIds;
-    private Set<Long> team2PlayerIds;
-
+    private List<PlayerInfoDTO> team1;
+    private List<PlayerInfoDTO> team2;
+    private List<MatchSetDTO> sets;
+    private Integer jornada;
 }

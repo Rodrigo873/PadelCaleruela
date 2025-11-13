@@ -2,6 +2,7 @@ package com.example.PadelCaleruela.controller;
 
 
 import com.example.PadelCaleruela.dto.InfoUserDTO;
+import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
 import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.service.UserService;
@@ -124,12 +125,27 @@ public class UserController {
         return userService.getSuggestedPlayers(userId);
     }
 
+    @GetMapping("/availableLeagues")
+    public ResponseEntity<List<PlayerInfoDTO>> getAvailableUsers(@RequestParam Long leagueId) {
+        List<PlayerInfoDTO> users = userService.getAvailableUsersForLeague(leagueId);
+        return ResponseEntity.ok(users);
+    }
+
     /** 🔹 Obtener lista de amigos mutuos */
     @GetMapping("/{userId}/friends")
     public ResponseEntity<List<UserDTO>> getFriends(@PathVariable Long userId) {
         List<UserDTO> amigos = userService.getFriends(userId);
         return ResponseEntity.ok(amigos);
     }
+
+    @GetMapping("/available-for-reservation/{reservationId}")
+    public ResponseEntity<List<PlayerInfoDTO>> getAvailablePlayersForReservation(
+            @PathVariable Long reservationId,
+            @RequestParam Long requesterId) {
+        List<PlayerInfoDTO> players = userService.getAvailablePlayersForReservation(reservationId, requesterId);
+        return ResponseEntity.ok(players);
+    }
+
 
     // Eliminar usuario
     @DeleteMapping("/{id}")

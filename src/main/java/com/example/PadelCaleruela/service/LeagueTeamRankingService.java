@@ -2,6 +2,8 @@ package com.example.PadelCaleruela.service;
 
 
 import com.example.PadelCaleruela.dto.LeagueTeamRankingDTO;
+import com.example.PadelCaleruela.dto.LeagueTeamRankingViewDTO;
+import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.model.League;
 import com.example.PadelCaleruela.model.LeagueTeam;
 import com.example.PadelCaleruela.model.User;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -39,22 +42,27 @@ public class LeagueTeamRankingService {
     public void initializeTeamRanking(Long leagueId) {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
+
         List<LeagueTeam> teams = teamRepository.findByLeague(league);
+
         for (LeagueTeam team : teams) {
             rankingRepository.findByLeagueAndTeam(league, team)
-                    .or(() -> Optional.of(rankingRepository.save(new LeagueTeamRanking() {{
-                        setLeague(league);
-                        setTeam(team);
-                        setMatchesPlayed(0);
-                        setMatchesWon(0);
-                        setMatchesLost(0);
-                        setPoints(0);
-                    }})));
+                    .orElseGet(() -> {
+                        LeagueTeamRanking ranking = new LeagueTeamRanking();
+                        ranking.setLeague(league);
+                        ranking.setTeam(team);
+                        ranking.setMatchesPlayed(0);
+                        ranking.setMatchesWon(0);
+                        ranking.setMatchesLost(0);
+                        ranking.setPoints(0);
+                        return rankingRepository.save(ranking);
+                    });
         }
     }
 
+
     @Transactional
-    public List<LeagueTeamRankingDTO> updateAfterMatch(Long matchId, LeagueTeam team1, LeagueTeam team2,
+    public List<LeagueTeamRankingViewDTO> updateAfterMatch(Long matchId, LeagueTeam team1, LeagueTeam team2,
                                                        int score1, int score2) {
         League league = team1.getLeague();
         boolean team1Wins = score1 > score2;
@@ -77,21 +85,43 @@ public class LeagueTeamRankingService {
         rankingRepository.save(ranking);
     }
 
-    public List<LeagueTeamRankingDTO> getRanking(Long leagueId) {
+    @Transactional(readOnly = true)
+    public List<LeagueTeamRankingViewDTO> getRanking(Long leagueId) {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
-        return rankingRepository.findByLeagueOrderByPointsDescMatchesWonDesc(league)
-                .stream()
-                .map(r -> new LeagueTeamRankingDTO(
-                        r.getTeam().getId(),
-                        r.getTeam().getPlayers().stream()
-                                .map(User::getUsername)
-                                .collect(Collectors.toList()),
-                        r.getMatchesPlayed(),
-                        r.getMatchesWon(),
-                        r.getMatchesLost(),
-                        r.getPoints()
-                ))
-                .collect(Collectors.toList());
+
+        // 🔹 Cargamos todos los rankings con sus equipos y jugadores
+        List<LeagueTeamRanking> rankings = rankingRepository.findByLeagueWithTeamAndPlayers(leagueId);
+
+        return rankings.stream()
+                .map(r -> {
+                    LeagueTeam team = r.getTeam();
+
+                    List<PlayerInfoDTO> players = team.getPlayers().stream()
+                            .map(p -> new PlayerInfoDTO(
+                                    p.getId(),
+                                    p.getUsername(),
+                                    p.getProfileImageUrl(),
+                                    false
+                            ))
+                            .toList();
+
+                    return new LeagueTeamRankingViewDTO(
+                            team.getId(),
+                            team.getName(),
+                            players,
+                            r.getMatchesPlayed(),
+                            r.getMatchesWon(),
+                            r.getMatchesLost(),
+                            r.getPoints()
+                    );
+                })
+                .toList();
     }
+
+
+
+
+
+
 }

@@ -43,9 +43,17 @@ public class LeagueMatchController {
     @PutMapping("/{matchId}/result")
     public Map<String, Object> updateResultAndRanking(
             @PathVariable Long matchId,
-            @RequestParam Integer team1Score,
-            @RequestParam Integer team2Score) {
-        return matchService.updateResultAndRanking(matchId, team1Score, team2Score);
+            @RequestBody Map<String, Object> payload
+    ) {
+        // 🧩 Extraer los sets del JSON
+        @SuppressWarnings("unchecked")
+        List<Map<String, Integer>> sets = (List<Map<String, Integer>>) payload.get("sets");
+
+        if (sets == null || sets.isEmpty()) {
+            throw new RuntimeException("Debe enviar al menos un set con los resultados.");
+        }
+
+        return matchService.updateResultAndRanking(matchId, sets);
     }
 
     @PutMapping("/{matchId}/reschedule")
