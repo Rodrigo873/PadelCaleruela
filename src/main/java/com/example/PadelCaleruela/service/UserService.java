@@ -1,6 +1,7 @@
 package com.example.PadelCaleruela.service;
 
 
+import com.example.PadelCaleruela.AppProperties;
 import com.example.PadelCaleruela.dto.InfoUserDTO;
 import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
@@ -9,8 +10,8 @@ import com.example.PadelCaleruela.repository.FriendshipRepository;
 import com.example.PadelCaleruela.repository.LeagueRepository;
 import com.example.PadelCaleruela.repository.ReservationRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
-import jakarta.mail.MessagingException;
 import jakarta.transaction.Transactional;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.multipart.MultipartFile;
@@ -36,48 +37,124 @@ public class UserService {
 
     private final LeagueRepository leagueRepository;
 
+    private final AuthService authService;
+
+    private final AppProperties appProperties;
+
     private static final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/profile-images/";
 
 
-    public UserService(UserRepository repo,BCryptPasswordEncoder passwordEncoder,FriendshipRepository friendshipRepository,
-                       ReservationRepository reservationRepository,EmailService emailService,LeagueRepository leagueRepository) {
+    public UserService(
+            UserRepository repo,
+            BCryptPasswordEncoder passwordEncoder,
+            FriendshipRepository friendshipRepository,
+            ReservationRepository reservationRepository,
+            EmailService emailService,
+            LeagueRepository leagueRepository,
+            AuthService authService,
+            AppProperties appProperties
+    ) {
         this.userRepository = repo;
-        this.passwordEncoder=passwordEncoder;
-        this.friendshipRepository=friendshipRepository;
-        this.reservationRepository=reservationRepository;
-        this.emailService=emailService;
-        this.leagueRepository=leagueRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.friendshipRepository = friendshipRepository;
+        this.reservationRepository = reservationRepository;
+        this.emailService = emailService;
+        this.leagueRepository = leagueRepository;
+        this.authService = authService;
+        this.appProperties = appProperties;
     }
+
 
     public List<UserDTO> getAllUsers() {
-        return userRepository.findAll()
-                .stream()
-                .map(this::toDTO)
-                .collect(Collectors.toList());
+
+        User current = authService.getCurrentUser();
+
+        if (authService.isSuperAdmin()) {
+            // SUPERADMIN → devuelve todos
+            return userRepository.findAll()
+                    .stream()
+                    .map(this::toDTO)
+                    .toList();
+        }
+
+        if (authService.isAdmin()) {
+            // ADMIN → solo usuarios de su ayuntamiento
+            Long ayuntamientoId = current.getAyuntamiento().getId();
+
+            return userRepository.findByAyuntamientoId(ayuntamientoId)
+                    .stream()
+                    .map(this::toDTO)
+                    .toList();
+        }
+
+        // USER → prohibido
+        throw new AccessDeniedException("No tienes permisos para ver la lista de usuarios.");
     }
 
+
     public List<InfoUserDTO> getAllInfoUsers() {
-        return userRepository.findAll()
-                .stream()
-                .map(this::toDTOinfo)
-                .collect(Collectors.toList());
+
+        User current = authService.getCurrentUser();
+
+        if (authService.isSuperAdmin()) {
+            return userRepository.findAll()
+                    .stream()
+                    .map(this::toDTOinfo)
+                    .toList();
+        }
+
+        if (authService.isAdmin()) {
+            Long ayId = current.getAyuntamiento().getId();
+            return userRepository.findByAyuntamientoId(ayId)
+                    .stream()
+                    .map(this::toDTOinfo)
+                    .toList();
+        }
+
+        throw new AccessDeniedException("No tienes permiso para ver esta información.");
     }
+
 
     @Transactional
     public User updateUserRole(Long userId, String newRole) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado con ID: " + userId));
 
-        // Validar que el rol sea correcto
-        if (!newRole.equalsIgnoreCase("USER") && !newRole.equalsIgnoreCase("ADMIN")) {
-            throw new IllegalArgumentException("Rol no válido. Debe ser USER o ADMIN.");
+        if (!authService.isSuperAdmin()) {
+            throw new AccessDeniedException("Solo el SUPERADMIN puede cambiar roles.");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        if (!newRole.equalsIgnoreCase("USER") &&
+                !newRole.equalsIgnoreCase("ADMIN") &&
+                !newRole.equalsIgnoreCase("SUPERADMIN")) {
+
+            throw new IllegalArgumentException("Rol no válido.");
         }
 
         user.setRole(Role.valueOf(newRole.toUpperCase()));
         return userRepository.save(user);
     }
 
+
     public UserDTO saveUser(User user) {
+
+        User current = authService.getCurrentUser();
+
+        // ADMIN solo puede crear usuarios en su ayuntamiento
+        if (authService.isAdmin()) {
+            if (!Objects.equals(user.getAyuntamiento().getId(),
+                    current.getAyuntamiento().getId())) {
+
+                throw new AccessDeniedException("Un administrador solo puede crear usuarios en su ayuntamiento.");
+            }
+        }
+
+        // USER no puede crear usuarios
+        if (authService.isUser()) {
+            throw new AccessDeniedException("No tienes permisos para crear usuarios.");
+        }
+
         // 🔹 Comprobación de username único
         if (userRepository.findByUsername(user.getUsername()).isPresent()) {
             throw new IllegalArgumentException("El nombre de usuario ya está en uso.");
@@ -114,21 +191,16 @@ public class UserService {
         // 🔹 Guardar usuario
         User saved = userRepository.save(user);
 
-        try {
-            emailService.sendHtmlEmail(
-                    user.getEmail(),
-                    "Usuario creado correctamente",
-                    "<h3>¡Hola " + user.getUsername() + "!</h3>" +
-                            "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>"+
-                            "<p>Se te ha asignado una contraseña al azar, puedes cambiarla desde la app.</p>"+
-                            "<p>La contraseña es="+pass+"</p>"
+        emailService.sendHtmlEmail(
+                user.getEmail(),
+                "Usuario creado correctamente",
+                "<h3>¡Hola " + user.getUsername() + "!</h3>" +
+                        "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>"+
+                        "<p>Se te ha asignado una contraseña al azar, puedes cambiarla desde la app.</p>"+
+                        "<p>La contraseña es="+pass+"</p>"
 
 
-            );
-        } catch (MessagingException e) {
-            // ⚠️ Evita que la app crashee si el correo falla
-            System.err.println("Error al enviar el correo: " + e.getMessage());
-        }
+        );
 
         // 🔹 Retornar el DTO
         return toDTO(saved);
@@ -136,191 +208,285 @@ public class UserService {
 
 
     public UserDTO getUserById(Long id) {
-        return userRepository.findById(id)
-                .map(this::toDTO)
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // SUPERADMIN → permitido
+        if (authService.isSuperAdmin()) return toDTO(target);
+
+        // USER → solo puede verse a sí mismo
+        if (authService.isUser() && !current.getId().equals(id)) {
+            throw new AccessDeniedException("No puedes ver datos de otro usuario.");
+        }
+
+        // ADMIN → solo usuarios de su ayuntamiento
+        authService.ensureSameAyuntamiento(target);
+
+        return toDTO(target);
     }
+
+    public PlayerInfoDTO getPublicPlayerProfile(Long id) {
+
+        User target = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // Si quieres limitar por ayuntamiento para TODOS menos superadmin:
+        User current = authService.getCurrentUser();
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        // Aquí devuelves solo info pública
+        return toPlayerInfoDTO(target); // o como lo tengas mapeado
+    }
+
+
 
     // 🔍 Buscar usuarios por username (insensible a mayúsculas/minúsculas)
     public List<UserDTO> searchUsersByUsername(String username) {
-        List<User> users = userRepository.findByUsernameContainingIgnoreCaseOrFullNameContainingIgnoreCase(username, username);
-        return users.stream()
-                .map(user -> {
-                    UserDTO dto = new UserDTO();
-                    dto.setId(user.getId());
-                    dto.setUsername(user.getUsername());
-                    dto.setFullName(user.getFullName());
-                    dto.setEmail(user.getEmail());
-                    dto.setCreatedAt(user.getCreatedAt());
-                    dto.setStatus(user.getStatus() != null ? user.getStatus().toString() : null);
-                    dto.setProfileImageUrl(user.getProfileImageUrl());
-                    return dto;
-                })
-                .collect(Collectors.toList());
+
+        User current = authService.getCurrentUser();
+
+        List<User> results = userRepository.findByUsernameContainingIgnoreCaseOrFullNameContainingIgnoreCase(username, username);
+
+        if (authService.isSuperAdmin()) {
+            return results.stream().map(this::toDTO).toList();
+        }
+
+        // Filtrar por ayuntamiento (ADMIN y USER)
+        Long ayId = current.getAyuntamiento().getId();
+
+        return results.stream()
+                .filter(u -> Objects.equals(u.getAyuntamiento().getId(), ayId))
+                .map(this::toDTO)
+                .toList();
     }
 
-    public UserDTO updateUserProfile(Long id,String fullName, String username, String email, String password, MultipartFile profileImage) throws IOException {
-        Optional<User> optionalUser = userRepository.findById(id);
-        if (optionalUser.isEmpty()) {
-            throw new RuntimeException("Usuario no encontrado");
+
+    public UserDTO updateUserProfile(Long id, String fullName, String username,
+                                     String email, String password, MultipartFile profileImage) throws IOException {
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // SUPERADMIN → puede editar a cualquiera
+        if (!authService.isSuperAdmin()) {
+
+            // USER → solo a sí mismo
+            if (authService.isUser() && !current.getId().equals(id)) {
+                throw new AccessDeniedException("No puedes editar el perfil de otro usuario.");
+            }
+
+            // ADMIN → solo usuarios de su ayuntamiento
+            authService.ensureSameAyuntamiento(target);
         }
 
-        User user = optionalUser.get();
-
-        // Actualizar campos si se han enviado
-        if (fullName != null && !fullName.isBlank()) {
-            user.setFullName(fullName);
-        }
-        if (username != null && !username.isBlank()) {
-            user.setUsername(username);
-        }
-        if (email != null && !email.isBlank()) {
-            user.setEmail(email);
-        }
+        // --- Actualizaciones seguras ---
+        if (fullName != null && !fullName.isBlank()) target.setFullName(fullName);
+        if (username != null && !username.isBlank()) target.setUsername(username);
+        if (email != null && !email.isBlank()) target.setEmail(email);
         if (password != null && !password.isBlank()) {
-            user.setPassword(passwordEncoder.encode(password));
+            target.setPassword(passwordEncoder.encode(password));
         }
-
-        // Guardar imagen si se ha enviado
         if (profileImage != null && !profileImage.isEmpty()) {
             String imageUrl = saveProfileImage(profileImage);
-            user.setProfileImageUrl(imageUrl);
+            target.setProfileImageUrl(imageUrl);
         }
-        User user1=userRepository.save(user);
-        UserDTO userDTO=toDTO(user1);
-        return userDTO;
+
+        return toDTO(userRepository.save(target));
     }
+
 
     // ✅ Actualizar el estado del usuario
     @Transactional
     public void updateUserStatus(Long userId, String newStatus) {
-        User user = userRepository.findById(userId)
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        user.setStatus(UserStatus.valueOf(newStatus.toUpperCase()));
-        userRepository.save(user);
+        if (!authService.isSuperAdmin()) {
+
+            if (authService.isUser() && !current.getId().equals(userId)) {
+                throw new AccessDeniedException("No puedes cambiar el estado de otro usuario.");
+            }
+
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        target.setStatus(UserStatus.valueOf(newStatus.toUpperCase()));
+        userRepository.save(target);
     }
 
 
+
     private String saveProfileImage(MultipartFile file) throws IOException {
+
         // Crear carpeta si no existe
         Path uploadPath = Paths.get("uploads/profile-images");
         if (!Files.exists(uploadPath)) {
             Files.createDirectories(uploadPath);
         }
 
-        // Sanear nombre del archivo (evita espacios y caracteres raros)
+        // Sanear nombre
         String originalFileName = file.getOriginalFilename();
         String sanitizedFileName = originalFileName != null
                 ? originalFileName.replaceAll("\\s+", "_")
                 : "unknown";
 
-        // Generar nombre único
+        // Nombre único
         String filename = UUID.randomUUID() + "_" + sanitizedFileName;
         Path filePath = uploadPath.resolve(filename);
 
-        // Guardar archivo
+        // Guardar archivo físico
         Files.write(filePath, file.getBytes());
 
-        // Retornar la ruta pública (que el frontend pueda acceder)
-        return "/uploads/profile-images/" + filename;
+        // URL pública completa
+        return appProperties.getBaseUrl() + "/uploads/profile-images/" + filename;
     }
+
 
 
     // 🔹 Actualizar usuario
     public Optional<UserDTO> updateUser(Long id, User updatedUser) {
+
+        User current = authService.getCurrentUser();
+
+        // SUPERADMIN → full access
+        if (authService.isUser()) {
+            throw new AccessDeniedException("No tienes permiso para modificar usuarios.");
+        }
+
         return userRepository.findById(id).map(user -> {
 
-            // 🔹 Verificar si el nuevo username pertenece a otro usuario
+            // ADMIN → solo su ayuntamiento
+            if (authService.isAdmin()) {
+                authService.ensureSameAyuntamiento(user);
+            }
+
+            // Validaciones normales…
             if (!user.getUsername().equals(updatedUser.getUsername()) &&
                     userRepository.findByUsername(updatedUser.getUsername()).isPresent()) {
-                throw new IllegalArgumentException("El nombre de usuario ya está en uso por otro usuario.");
+                throw new IllegalArgumentException("El nombre de usuario ya está en uso.");
             }
 
-            // 🔹 Verificar si el nuevo email pertenece a otro usuario
             if (!user.getEmail().equals(updatedUser.getEmail()) &&
                     userRepository.findByEmail(updatedUser.getEmail()).isPresent()) {
-                throw new IllegalArgumentException("El correo electrónico ya está registrado por otro usuario.");
+                throw new IllegalArgumentException("El correo ya está en uso.");
             }
 
-            // 🔹 Actualizar los campos permitidos
             user.setUsername(updatedUser.getUsername());
             user.setEmail(updatedUser.getEmail());
             user.setFullName(updatedUser.getFullName());
 
-            // 🔹 Solo encriptar si se envía una nueva contraseña
-            if (updatedUser.getPassword() != null && !updatedUser.getPassword().isBlank()) {
+            if (updatedUser.getPassword() != null &&
+                    !updatedUser.getPassword().isBlank()) {
                 user.setPassword(passwordEncoder.encode(updatedUser.getPassword()));
             }
 
-            // 🔹 Guardar cambios y devolver DTO
-            User savedUser = userRepository.save(user);
-            return toDTO(savedUser);
+            return toDTO(userRepository.save(user));
         });
     }
+
+
 
     /**
      * 🔹 Obtiene los amigos de mis amigos (sugerencias)
      */
     public List<UserDTO> getSuggestedPlayers(Long userId) {
-        // ✅ 1. Usuarios que yo sigo (amistades aceptadas o pendientes)
+
+        User current = authService.getCurrentUser();
+
+        // 🔐 Solo SUPERADMIN puede ver sugerencias de otros usuarios
+        if (!authService.isSuperAdmin() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes obtener sugerencias para otro usuario.");
+        }
+
+        Long ayId = current.getAyuntamiento().getId();
+
+        // --------------------------------------------------------------------
+        // 🔥 Lógica original de sugerencias
+        // --------------------------------------------------------------------
+
+        // 1️⃣ Usuarios que yo sigo (amistades aceptadas o pendientes)
         List<Long> followingIds = friendshipRepository.findFriendIdsByUserId(userId);
 
-        // ✅ 2. Usuarios que me siguen (amistades aceptadas o pendientes)
+        // 2️⃣ Usuarios que me siguen
         List<Long> followersIds = friendshipRepository.findUserIdsByFriendId(userId);
 
-        // ✅ 3. Usuarios con amistad aceptada (mutuos)
+        // 3️⃣ Amistad mutua (ACCEPTED en ambos lados)
         List<Long> mutualIds = friendshipRepository.findAcceptedFriendIdsByUserId(userId);
 
-        // ✅ 4. Solicitudes pendientes (enviadas o recibidas)
+        // 4️⃣ Solicitudes pendientes
         List<Long> pendingIds = friendshipRepository.findPendingFriendshipUserIds(userId);
 
-        // ✅ 5. Amigos de mis amigos (solo aceptadas)
-        List<Long> friendsOfFriends = friendshipRepository.findAcceptedFriendIdsByUserIds(mutualIds).stream()
+        // 5️⃣ Amigos de mis amigos (ACCEPTED)
+        List<Long> friendsOfFriends = friendshipRepository.findAcceptedFriendIdsByUserIds(mutualIds)
+                .stream()
                 .filter(id -> !id.equals(userId))
                 .filter(id -> !mutualIds.contains(id))
                 .distinct()
                 .toList();
 
-        // ✅ 6. Usuarios que mis amigos siguen
-        List<Long> friendsFollowing = friendshipRepository.findFollowingOfFriends(mutualIds).stream()
+        // 6️⃣ Usuarios que mis amigos siguen
+        List<Long> friendsFollowing = friendshipRepository.findFollowingOfFriends(mutualIds)
+                .stream()
                 .filter(id -> !id.equals(userId))
                 .filter(id -> !mutualIds.contains(id))
                 .filter(id -> !friendsOfFriends.contains(id))
                 .distinct()
                 .toList();
 
-        // ✅ 7. Jugadores más activos (más reservas confirmadas)
-        List<Long> topPlayers = reservationRepository.findTopPlayersByConfirmedReservations().stream()
+        // 7️⃣ Jugadores más activos (reservas confirmadas)
+        List<Long> topPlayers = reservationRepository.findTopPlayersByConfirmedReservations()
+                .stream()
                 .filter(id -> !id.equals(userId))
                 .filter(id -> !mutualIds.contains(id))
                 .filter(id -> !friendsOfFriends.contains(id))
                 .filter(id -> !friendsFollowing.contains(id))
                 .toList();
 
-        // ✅ 8. Combinar sugerencias
+        // 8️⃣ Combinar todas las sugerencias
         List<Long> allSuggestedIds = new ArrayList<>();
         allSuggestedIds.addAll(friendsOfFriends);
         allSuggestedIds.addAll(friendsFollowing);
         allSuggestedIds.addAll(topPlayers);
 
-        // ✅ 9. Excluir los que YA SIGO o tengo solicitud pendiente
-        // ⚠️ (NO excluye los que me siguen)
+        // 9️⃣ Excluir los que YA SIGO o tienen solicitud pendiente
         allSuggestedIds = allSuggestedIds.stream()
                 .filter(id -> !followingIds.contains(id))
                 .filter(id -> !pendingIds.contains(id))
                 .distinct()
                 .toList();
 
-        // ✅ 10. Buscar usuarios y mantener orden
+        // 🔟 Cargar usuarios manteniendo el orden original
         List<User> suggestedUsers = userRepository.findAllById(allSuggestedIds);
         Map<Long, Integer> orderMap = new HashMap<>();
         for (int i = 0; i < allSuggestedIds.size(); i++) {
             orderMap.put(allSuggestedIds.get(i), i);
         }
 
-        suggestedUsers.sort(Comparator.comparingInt(u -> orderMap.getOrDefault(u.getId(), Integer.MAX_VALUE)));
+        suggestedUsers.sort(Comparator.comparingInt(
+                u -> orderMap.getOrDefault(u.getId(), Integer.MAX_VALUE)
+        ));
 
+        // --------------------------------------------------------------------
+        // 🔐 FILTRO MULTI-AYUNTAMIENTO
+        // --------------------------------------------------------------------
+        // SUPERADMIN → ve todos
+        if (!authService.isSuperAdmin()) {
+            suggestedUsers = suggestedUsers.stream()
+                    .filter(u -> u.getAyuntamiento() != null &&
+                            Objects.equals(u.getAyuntamiento().getId(), ayId))
+                    .toList();
+        }
+
+        // --------------------------------------------------------------------
+        // 🎯 Convertir a DTO y devolver
+        // --------------------------------------------------------------------
         return suggestedUsers.stream()
                 .map(this::toDTO)
                 .toList();
@@ -328,117 +494,183 @@ public class UserService {
 
 
 
+
     public List<UserDTO> findAvailablePlayers() {
-        List<User> activeUsers = userRepository.findByStatus(UserStatus.ACTIVE);
-        return activeUsers.stream()
+
+        User current = authService.getCurrentUser();
+
+        if (authService.isSuperAdmin()) {
+            return userRepository.findByStatus(UserStatus.ACTIVE)
+                    .stream()
+                    .map(this::toDTO)
+                    .toList();
+        }
+
+        Long ayId = current.getAyuntamiento().getId();
+
+        return userRepository.findByStatus(UserStatus.ACTIVE)
+                .stream()
+                .filter(u -> Objects.equals(u.getAyuntamiento().getId(), ayId))
                 .map(this::toDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
     /**
      * Devuelve todos los usuarios que NO estén inscritos en una liga específica.
      */
     public List<PlayerInfoDTO> getAvailableUsersForLeague(Long leagueId) {
-        League league = leagueRepository.findById(leagueId)
-                .orElseThrow(() -> new RuntimeException("League not found"));
 
-        // 🔹 IDs de los jugadores ya inscritos en la liga
+        User current = authService.getCurrentUser();
+        League league = leagueRepository.findById(leagueId)
+                .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
+
+        // 🔐 Validar que la liga pertenece al mismo ayuntamiento
+        authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
         Set<Long> playerIdsInLeague = league.getPlayers()
                 .stream()
                 .map(User::getId)
                 .collect(Collectors.toSet());
 
-        // 🔹 Filtramos solo los usuarios activos y que no estén en la liga
-        return userRepository.findAll().stream()
-                .filter(u -> "ACTIVE".equalsIgnoreCase(u.getStatus().toString()))              // 👈 solo usuarios activos
-                .filter(u -> !playerIdsInLeague.contains(u.getId()))               // 👈 que no estén en la liga
+        List<User> allUsers = userRepository.findByAyuntamientoId(
+                league.getAyuntamiento().getId()
+        );
+
+        return allUsers.stream()
+                .filter(u -> u.getStatus() == UserStatus.ACTIVE)
+                .filter(u -> !playerIdsInLeague.contains(u.getId()))
                 .map(u -> new PlayerInfoDTO(
                         u.getId(),
                         u.getUsername(),
                         u.getProfileImageUrl(),
                         false
                 ))
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
 
 
     // 🔹 Eliminar usuario
     public boolean deleteUser(Long id) {
-        if (userRepository.existsById(id)) {
-            userRepository.deleteById(id);
-            return true;
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        if (authService.isUser()) {
+            throw new AccessDeniedException("No puedes eliminar usuarios.");
         }
-        return false;
+
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        userRepository.delete(target);
+        return true;
     }
+
 
     /** 🔹 Obtener los amigos mutuos (ambos ACCEPTED) */
     public List<UserDTO> getFriends(Long userId) {
-        // Usuarios que yo sigo con estado ACCEPTED
-        List<Long> followingIds = friendshipRepository.findAcceptedFriendIdsByUserId(userId);
 
-        // Usuarios que me siguen con estado ACCEPTED
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes ver los amigos de otro usuario.");
+        }
+
+        List<Long> followingIds = friendshipRepository.findAcceptedFriendIdsByUserId(userId);
         List<Long> followersIds = friendshipRepository.findAcceptedUserIdsByFriendId(userId);
 
-        // Intersección → amigos mutuos
-        List<Long> mutualIds = followingIds.stream()
+        List<Long> mutual = followingIds.stream()
                 .filter(followersIds::contains)
                 .toList();
 
-        // Buscar usuarios y mapear a DTO
-        List<User> mutualUsers = userRepository.findAllById(mutualIds);
-        return mutualUsers.stream()
-                .map(this::toDTO)
-                .toList();
+        List<User> users = userRepository.findAllById(mutual);
+
+        return users.stream().map(this::toDTO).toList();
     }
 
-    @Transactional()
+
+    @Transactional
     public List<PlayerInfoDTO> getAvailablePlayersForReservation(Long reservationId, Long requesterId) {
+
+        User requester = authService.getCurrentUser();
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new RuntimeException("Reserva no encontrada"));
 
-        // 1️⃣ Jugadores ya en la reserva
+        // 🔐 Validación multi-ayuntamiento
+        authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
+
+        // 👴 Solo superadmin puede ignorar requesterId
+        if (!authService.isSuperAdmin() && !Objects.equals(requester.getId(), requesterId)) {
+            throw new AccessDeniedException("No tienes permiso para hacer esta acción.");
+        }
+
         Set<Long> jugadoresActuales = reservation.getJugadores().stream()
                 .map(User::getId)
                 .collect(Collectors.toSet());
 
-        // 2️⃣ Usuarios con invitaciones REJECTED o PENDING (no los queremos mostrar)
         Set<Long> excluidosPorInvitacion = reservation.getInvitations().stream()
                 .filter(inv -> inv.getStatus() != InvitationStatus.ACCEPTED)
                 .map(inv -> inv.getReceiver().getId())
                 .collect(Collectors.toSet());
 
-        // 3️⃣ Combinar exclusiones
-        Set<Long> excluidos = new HashSet<>();
-        excluidos.addAll(jugadoresActuales);
+        Set<Long> excluidos = new HashSet<>(jugadoresActuales);
         excluidos.addAll(excluidosPorInvitacion);
-        excluidos.add(reservation.getUser().getId()); // el creador tampoco se muestra
+        excluidos.add(reservation.getUser().getId()); // creador
 
-        // 4️⃣ Devolver todos los usuarios que no estén excluidos
-        return userRepository.findAll().stream()
+        // Traemos todos los usuarios del mismo ayuntamiento
+        List<User> validUsers = userRepository.findByAyuntamientoId(
+                reservation.getAyuntamiento().getId()
+        );
+
+        return validUsers.stream()
                 .filter(u -> !excluidos.contains(u.getId()))
                 .map(u -> new PlayerInfoDTO(
                         u.getId(),
                         u.getUsername(),
-                        u.getProfileImageUrl() != null
-                                ? u.getProfileImageUrl()
-                                : "https://ui-avatars.com/api/?name=" + u.getUsername(),
+                        u.getProfileImageUrl(),
                         false
                 ))
                 .toList();
     }
 
 
+
     public User updateProfileImage(Long userId, String imageUrl) {
-        User user = userRepository.findById(userId)
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        user.setProfileImageUrl(imageUrl);
-        return userRepository.save(user);
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes cambiar la foto de otro usuario.");
+        }
+
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        target.setProfileImageUrl(imageUrl);
+        return userRepository.save(target);
     }
 
+
     public User findByUsername(String username) {
-        return userRepository.findByUsername(username).orElse(null);
+
+        User current = authService.getCurrentUser();
+        User found = userRepository.findByUsername(username).orElse(null);
+
+        if (found == null) return null;
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(found);
+        }
+
+        return found;
     }
 
 
@@ -464,6 +696,15 @@ public class UserService {
         return dto;
     }
 
+    private PlayerInfoDTO toPlayerInfoDTO(User user) {
+
+        return new PlayerInfoDTO(
+                user.getId(),
+                user.getUsername(),
+                user.getProfileImageUrl(),
+                false
+        );
+    }
 
 
 }

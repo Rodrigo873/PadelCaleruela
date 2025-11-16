@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.LocalTime;
 import java.util.List;
 
@@ -17,5 +18,6 @@ public class HourSlotDTO {
     private List<PlayerInfoDTO> players;
     private boolean esCreador;
     private Long reservationId; // 👈 nuevo
+    private BigDecimal precio;
 
 }

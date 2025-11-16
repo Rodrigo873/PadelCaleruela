@@ -51,6 +51,12 @@ public class UserController {
         return userService.getUserById(id);
     }
 
+    @GetMapping("/public/{id}")
+    public PlayerInfoDTO getPublicProfile(@PathVariable Long id) {
+        return userService.getPublicPlayerProfile(id);
+    }
+
+
     @GetMapping("/search")
     public ResponseEntity<List<UserDTO>> searchUsers(@RequestParam("username") String username) {
         return ResponseEntity.ok(userService.searchUsersByUsername(username));

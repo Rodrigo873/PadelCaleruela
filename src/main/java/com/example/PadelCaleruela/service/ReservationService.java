@@ -2,19 +2,18 @@ package com.example.PadelCaleruela.service;
 
 import com.example.PadelCaleruela.dto.*;
 import com.example.PadelCaleruela.model.*;
-import com.example.PadelCaleruela.repository.InvitationRepository;
-import com.example.PadelCaleruela.repository.PaymentRepository;
-import com.example.PadelCaleruela.repository.ReservationRepository;
-import com.example.PadelCaleruela.repository.UserRepository;
+import com.example.PadelCaleruela.repository.*;
 import jakarta.mail.MessagingException;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -32,19 +31,39 @@ public class ReservationService {
     private final InvitationRepository invitationRepository;
     private final PaymentRepository paymentRepository;
     private final EmailService emailService;
+    private final AuthService authService;
+    private final PricingService pricingService;
+    private final TarifaRepository tarifaRepo;
+    private final TarifaFranjaRepository franjaRepo;
+
     @PersistenceContext
     private EntityManager entityManager;
 
     // 🔹 Crear reserva con duración fija de 1h30min
     @Transactional
     public ReservationDTO createReservation(ReservationDTO dto) {
-        LocalDateTime start = dto.getStartTime();
-        LocalDateTime end = start.plusMinutes(90);
 
         User creator = userRepository.findById(dto.getUserId())
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        // Crear la reserva
+        User current = authService.getCurrentUser();
+
+        // USER solo puede crear su propia reserva
+        if (authService.isUser() && !current.getId().equals(dto.getUserId())) {
+            throw new AccessDeniedException("No puedes crear reservas para otro usuario.");
+        }
+
+        // ADMIN debe estar en el mismo ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(creator);
+        }
+
+        // SUPERADMIN no tiene restricciones
+
+        LocalDateTime start = dto.getStartTime();
+        LocalDateTime end = start.plusMinutes(90);
+        BigDecimal precio = pricingService.calcularPrecio(start, creator.getAyuntamiento());
+
         Reservation reservation = new Reservation();
         reservation.setUser(creator);
         reservation.setStartTime(start);
@@ -52,15 +71,16 @@ public class ReservationService {
         reservation.setPaid(false);
         reservation.setStatus(ReservationStatus.PENDING);
         reservation.setPublic(dto.isPublic());
-
-        // Creador siempre incluido
+        reservation.setAyuntamiento(creator.getAyuntamiento()); // 🔥 MULTI-AYTO
+        reservation.setPrecio(precio);
+        // Jugadores incluye al creador
         Set<User> jugadores = new HashSet<>();
         jugadores.add(creator);
         reservation.setJugadores(jugadores);
 
         Reservation saved = reservationRepository.save(reservation);
 
-        // Crear invitaciones iniciales si las hay
+        // Invitaciones
         if (dto.getJugadores() != null && !dto.getJugadores().isEmpty()) {
             List<Long> invitedIds = dto.getJugadores().stream()
                     .map(UserDTO::getId)
@@ -69,6 +89,12 @@ public class ReservationService {
 
             if (!invitedIds.isEmpty()) {
                 List<User> invitados = userRepository.findAllById(invitedIds);
+
+                // Validación multi-ayuntamiento
+                for (User invited : invitados) {
+                    authService.ensureSameAyuntamiento(invited);
+                }
+
                 for (User invited : invitados) {
                     Invitation inv = new Invitation();
                     inv.setReservation(saved);
@@ -84,41 +110,57 @@ public class ReservationService {
         return toDTO(saved);
     }
 
+
     // 🔹 Nuevo método solo para invitar jugadores (sin crear reserva)
     @Transactional
     public String inviteToReservation(Long reservationId, Long senderId, List<Long> invitedIds) {
+
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        User current = authService.getCurrentUser();
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new RuntimeException("Reserva no encontrada."));
 
-        User sender = userRepository.findById(senderId)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
+        // Validación ayuntamiento
+        authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
 
+        // Solo el creador puede invitar
         if (!reservation.getUser().getId().equals(senderId)) {
-            throw new RuntimeException("Solo el creador puede invitar jugadores.");
+            throw new AccessDeniedException("Solo el creador puede invitar jugadores.");
+        }
+
+        // ADMIN/USER → solo invitar dentro del ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(sender);
         }
 
         if (reservation.getJugadores().size() >= 4) {
-            throw new RuntimeException("La reserva ya está completa (máximo 4 jugadores).");
+            throw new RuntimeException("La reserva ya está completa.");
         }
 
         for (Long invitedId : invitedIds) {
+
             if (invitedId.equals(senderId)) continue;
 
             User invited = userRepository.findById(invitedId)
                     .orElseThrow(() -> new RuntimeException("Jugador no encontrado: " + invitedId));
 
-            // Buscar invitaciones previas
-            List<Invitation> existing = invitationRepository
-                    .findAllByReservationIdAndReceiverIdOrderByCreatedAtAsc(reservationId, invitedId);
+            // Validación multi-ayuntamiento
+            authService.ensureSameAyuntamiento(invited);
+
+            // Evitar duplicados
+            List<Invitation> existing = invitationRepository.findAllByReservationIdAndReceiverIdOrderByCreatedAtAsc(reservationId, invitedId);
 
             if (!existing.isEmpty()) {
                 Invitation last = existing.get(existing.size() - 1);
-                if (last.getStatus() == InvitationStatus.PENDING) {
-                    continue; // Ya hay una pendiente
-                }
+
+                if (last.getStatus() == InvitationStatus.PENDING) continue;
+
                 last.setStatus(InvitationStatus.PENDING);
                 last.setCreatedAt(LocalDateTime.now());
                 invitationRepository.save(last);
+
             } else {
                 Invitation inv = new Invitation();
                 inv.setReservation(reservation);
@@ -130,7 +172,7 @@ public class ReservationService {
             }
         }
 
-        return "✅ Invitaciones enviadas correctamente.";
+        return "Invitaciones enviadas correctamente.";
     }
 
 
@@ -146,11 +188,27 @@ public class ReservationService {
 
 
     public List<InfoReservationDTO> getAllInfoReservation() {
-        return reservationRepository.findAll()
-                .stream()
-                .map(this::toDTOinfo)
-                .collect(Collectors.toList());
+
+        User current = authService.getCurrentUser();
+
+        if (authService.isSuperAdmin()) {
+            return reservationRepository.findAll()
+                    .stream()
+                    .map(this::toDTOinfo)
+                    .toList();
+        }
+
+        if (authService.isAdmin()) {
+            Long ayId = current.getAyuntamiento().getId();
+            return reservationRepository.findByAyuntamientoId(ayId)
+                    .stream()
+                    .map(this::toDTOinfo)
+                    .toList();
+        }
+
+        throw new AccessDeniedException("No tienes permiso para ver esta información.");
     }
+
 
 
     // 🔹 Cancelar reservas no pagadas después de 15 minutos
@@ -184,18 +242,44 @@ public class ReservationService {
 
 
     public List<ReservationDTO> getReservationsForDay(LocalDate date) {
+
+        User current = authService.getCurrentUser();
+
         LocalDateTime startOfDay = date.atStartOfDay();
         LocalDateTime endOfDay = date.plusDays(1).atStartOfDay();
 
-        return reservationRepository.findByStartTimeBetween(startOfDay, endOfDay)
-                .stream()
+        List<Reservation> reservations;
+
+        if (authService.isSuperAdmin()) {
+            reservations = reservationRepository.findByStartTimeBetween(startOfDay, endOfDay);
+        } else {
+            Long ayId = current.getAyuntamiento().getId();
+            reservations = reservationRepository.findByStartTimeBetweenAndAyuntamientoId(startOfDay, endOfDay, ayId);
+        }
+
+        return reservations.stream()
                 .map(this::toDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
     // ReservationService
     @Transactional(readOnly = true)
     public List<ReservationDTO> getReservationsByUserAndStatus(Long userId, String statusStr) {
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // USER → solo las suyas
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes ver reservas de otros usuarios.");
+        }
+
+        // ADMIN → solo dentro del ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
         ReservationStatus status;
         try {
             status = ReservationStatus.valueOf(statusStr.toUpperCase());
@@ -240,6 +324,22 @@ public class ReservationService {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new RuntimeException("Reserva no encontrada."));
 
+        User current = authService.getCurrentUser();
+
+        // Usuario solo puede cancelar su reserva
+        if (authService.isUser() && !reservation.getUser().getId().equals(current.getId())) {
+            throw new AccessDeniedException("No puedes cancelar reservas de otros usuarios.");
+        }
+
+        // Admin solo si pertenece al ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
+        }
+
+        if (reservation.getPayment() != null) {
+            paymentRepository.delete(reservation.getPayment());
+        }
+
         if (!reservation.getUser().getId().equals(userId)) {
             throw new RuntimeException("No tienes permiso para cancelar esta reserva.");
         }
@@ -253,47 +353,42 @@ public class ReservationService {
         }
 
         // 📩 Preparar y enviar correo a todos los jugadores
-        try {
-            // Obtener los correos de todos los jugadores involucrados
-            List<User> jugadores = new ArrayList<>(reservation.getJugadores());
-            String creador = reservation.getUser().getFullName();
-            LocalDateTime fechaHora = reservation.getStartTime();
+        // Obtener los correos de todos los jugadores involucrados
+        List<User> jugadores = new ArrayList<>(reservation.getJugadores());
+        String creador = reservation.getUser().getFullName();
+        LocalDateTime fechaHora = reservation.getStartTime();
 
-            String fechaFormateada = fechaHora.format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM 'a las' HH:mm", new Locale("es", "ES")));
+        String fechaFormateada = fechaHora.format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM 'a las' HH:mm", new Locale("es", "ES")));
 
-            // Crear HTML del correo
-            StringBuilder jugadoresList = new StringBuilder();
-            for (User jugador : jugadores) {
-                jugadoresList.append("<li>").append(jugador.getFullName()).append("</li>");
+        // Crear HTML del correo
+        StringBuilder jugadoresList = new StringBuilder();
+        for (User jugador : jugadores) {
+            jugadoresList.append("<li>").append(jugador.getFullName()).append("</li>");
+        }
+
+        String html = """
+        <div style="font-family: Arial, sans-serif; color: #333;">
+            <h2 style="color: #d32f2f;">Reserva Cancelada</h2>
+            <p>Hola,</p>
+            <p>La reserva ha sido <strong>cancelada</strong> por <b>%s</b>.</p>
+            <p><strong>Fecha y hora:</strong> %s</p>
+            <p><strong>Jugadores de la reserva:</strong></p>
+            <ul>%s</ul>
+            <p>Si crees que esto fue un error, contacta con el administrador.</p>
+            <hr>
+            <p style="font-size: 0.9rem; color: #555;">Club de Pádel Caleruela</p>
+        </div>
+        """.formatted(creador, fechaFormateada, jugadoresList);
+
+        // Enviar el correo a todos los jugadores
+        for (User jugador : jugadores) {
+            if (jugador.getEmail() != null && !jugador.getEmail().isEmpty()) {
+                emailService.sendHtmlEmail(
+                        jugador.getEmail(),
+                        "Reserva cancelada - " + fechaFormateada,
+                        html
+                );
             }
-
-            String html = """
-            <div style="font-family: Arial, sans-serif; color: #333;">
-                <h2 style="color: #d32f2f;">Reserva Cancelada</h2>
-                <p>Hola,</p>
-                <p>La reserva ha sido <strong>cancelada</strong> por <b>%s</b>.</p>
-                <p><strong>Fecha y hora:</strong> %s</p>
-                <p><strong>Jugadores de la reserva:</strong></p>
-                <ul>%s</ul>
-                <p>Si crees que esto fue un error, contacta con el administrador.</p>
-                <hr>
-                <p style="font-size: 0.9rem; color: #555;">Club de Pádel Caleruela</p>
-            </div>
-            """.formatted(creador, fechaFormateada, jugadoresList);
-
-            // Enviar el correo a todos los jugadores
-            for (User jugador : jugadores) {
-                if (jugador.getEmail() != null && !jugador.getEmail().isEmpty()) {
-                    emailService.sendHtmlEmail(
-                            jugador.getEmail(),
-                            "Reserva cancelada - " + fechaFormateada,
-                            html
-                    );
-                }
-            }
-
-        } catch (MessagingException e) {
-            System.err.println("⚠️ Error al enviar correo de cancelación: " + e.getMessage());
         }
 
         // 🗑️ Finalmente elimina la reserva
@@ -323,51 +418,72 @@ public class ReservationService {
         reservation.setStatus(ReservationStatus.CANCELED);
 
         // 📩 Preparar y enviar correo a todos los jugadores
-        try {
-            // Obtener los correos de todos los jugadores involucrados
-            List<User> jugadores = new ArrayList<>(reservation.getJugadores());
-            String creador = reservation.getUser().getFullName();
-            LocalDateTime fechaHora = reservation.getStartTime();
+        // Obtener los correos de todos los jugadores involucrados
+        List<User> jugadores = new ArrayList<>(reservation.getJugadores());
+        String creador = reservation.getUser().getFullName();
+        LocalDateTime fechaHora = reservation.getStartTime();
 
-            String fechaFormateada = fechaHora.format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM 'a las' HH:mm", new Locale("es", "ES")));
+        String fechaFormateada = fechaHora.format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM 'a las' HH:mm", new Locale("es", "ES")));
 
-            // Crear HTML del correo
-            StringBuilder jugadoresList = new StringBuilder();
-            for (User jugador : jugadores) {
-                jugadoresList.append("<li>").append(jugador.getFullName()).append("</li>");
+        // Crear HTML del correo
+        StringBuilder jugadoresList = new StringBuilder();
+        for (User jugador : jugadores) {
+            jugadoresList.append("<li>").append(jugador.getFullName()).append("</li>");
+        }
+
+        String html = """
+        <div style="font-family: Arial, sans-serif; color: #333;">
+            <h2 style="color: #d32f2f;">Reserva Cancelada</h2>
+            <p>Hola,</p>
+            <p>La reserva ha sido <strong>cancelada</strong> por <b>%s</b>.</p>
+            <p><strong>Fecha y hora:</strong> %s</p>
+            <p><strong>Jugadores de la reserva:</strong></p>
+            <ul>%s</ul>
+            <p>Si crees que esto fue un error, contacta con el administrador.</p>
+            <hr>
+            <p style="font-size: 0.9rem; color: #555;">Club de Pádel Caleruela</p>
+        </div>
+        """.formatted(creador, fechaFormateada, jugadoresList);
+
+        // Enviar el correo a todos los jugadores
+        for (User jugador : jugadores) {
+            if (jugador.getEmail() != null && !jugador.getEmail().isEmpty()) {
+                emailService.sendHtmlEmail(
+                        jugador.getEmail(),
+                        "Reserva cancelada - " + fechaFormateada,
+                        html
+                );
             }
-
-            String html = """
-            <div style="font-family: Arial, sans-serif; color: #333;">
-                <h2 style="color: #d32f2f;">Reserva Cancelada</h2>
-                <p>Hola,</p>
-                <p>La reserva ha sido <strong>cancelada</strong> por <b>%s</b>.</p>
-                <p><strong>Fecha y hora:</strong> %s</p>
-                <p><strong>Jugadores de la reserva:</strong></p>
-                <ul>%s</ul>
-                <p>Si crees que esto fue un error, contacta con el administrador.</p>
-                <hr>
-                <p style="font-size: 0.9rem; color: #555;">Club de Pádel Caleruela</p>
-            </div>
-            """.formatted(creador, fechaFormateada, jugadoresList);
-
-            // Enviar el correo a todos los jugadores
-            for (User jugador : jugadores) {
-                if (jugador.getEmail() != null && !jugador.getEmail().isEmpty()) {
-                    emailService.sendHtmlEmail(
-                            jugador.getEmail(),
-                            "Reserva cancelada - " + fechaFormateada,
-                            html
-                    );
-                }
-            }
-
-        } catch (MessagingException e) {
-            System.err.println("⚠️ Error al enviar correo de cancelación: " + e.getMessage());
         }
 
 
         reservationRepository.save(reservation);
+    }
+
+
+    private BigDecimal calcularPrecio(LocalTime hora, Ayuntamiento a) {
+
+        // 1️⃣ Obtener tarifa base del ayuntamiento
+        Tarifa tarifa = tarifaRepo.findByAyuntamientoId(a.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "El ayuntamiento no tiene una tarifa configurada"
+                ));
+
+        // 2️⃣ Obtener franjas especiales
+        List<TarifaFranja> franjas = franjaRepo.findByAyuntamientoId(a.getId());
+
+        int hour = hora.getHour();
+
+        // 3️⃣ Buscar si la hora cae en alguna franja
+        for (TarifaFranja fr : franjas) {
+            // Ej: 10:00 cae entre 9 y 12
+            if (hour >= fr.getHoraInicio() && hour < fr.getHoraFin()) {
+                return fr.getPrecio();
+            }
+        }
+
+        // 4️⃣ Si no está dentro de ninguna franja → precio base
+        return tarifa.getPrecioBase();
     }
 
 
@@ -376,6 +492,28 @@ public class ReservationService {
     // 🔹 Genera los slots disponibles de un día
     @Transactional(readOnly = true)
     public List<HourSlotDTO> getAvailableHours(LocalDate date) {
+        User current = authService.getCurrentUser();
+        Ayuntamiento ay = current.getAyuntamiento();
+
+        LocalDateTime startOfDay = date.atStartOfDay();
+        LocalDateTime endOfDay = date.plusDays(1).atStartOfDay();
+
+        List<Reservation> reservations;
+
+        if (authService.isSuperAdmin()) {
+            reservations = reservationRepository
+                    .findByStartTimeBetween(startOfDay, endOfDay)
+                    .stream()
+                    .filter(r -> r.getStatus() != ReservationStatus.CANCELED)
+                    .toList();
+        } else {
+            reservations = reservationRepository.findByStartTimeBetweenAndAyuntamientoId(
+                    startOfDay,
+                    endOfDay,
+                    current.getAyuntamiento().getId()
+            );
+        }
+
         LocalTime opening = LocalTime.of(8, 0);
         LocalTime closing = LocalTime.of(23, 0);
 
@@ -383,15 +521,6 @@ public class ReservationService {
         for (LocalTime time = opening; time.isBefore(closing); time = time.plusMinutes(90)) {
             allSlots.add(time);
         }
-
-        LocalDateTime startOfDay = date.atStartOfDay();
-        LocalDateTime endOfDay   = date.plusDays(1).atStartOfDay();
-
-        List<Reservation> reservations = reservationRepository
-                .findByStartTimeBetween(startOfDay, endOfDay)
-                .stream()
-                .filter(r -> r.getStatus() != ReservationStatus.CANCELED)
-                .toList();
 
         // ✅ Resolver correctamente el usuario actual (username o email)
         Long currentUserId = resolveCurrentUserId();
@@ -409,7 +538,7 @@ public class ReservationService {
                 String status = switch (reservation.getStatus()) {
                     case PENDING   -> "PENDING_PAYMENT";
                     case CONFIRMED -> "PAID";
-                    default        -> "RESERVED";
+                    default        -> "AVAILABLE";
                 };
 
                 List<PlayerInfoDTO> players = reservation.getJugadores().stream()
@@ -434,11 +563,14 @@ public class ReservationService {
                         && reservation.getUser() != null
                         && reservation.getUser().getId().equals(currentUserId);
 
-                HourSlotDTO dto = new HourSlotDTO(slot, status, reservation.isPublic(), players, esCreador,reservation.getId());
+                BigDecimal precio = calcularPrecio(slot, ay);
+
+                HourSlotDTO dto = new HourSlotDTO(slot, status, reservation.isPublic(), players, esCreador,reservation.getId(),precio);
                 result.add(dto);
 
             } else {
-                result.add(new HourSlotDTO(slot, "AVAILABLE", false, List.of(), false, null));
+                BigDecimal precio = calcularPrecio(slot, ay);
+                result.add(new HourSlotDTO(slot, "AVAILABLE", false, List.of(), false, null,precio));
             }
 
         }
@@ -491,18 +623,43 @@ public class ReservationService {
 
     //Reservas de usuario
     public List<ReservationDTO> getReservationsByUser(Long userId) {
-        User user = userRepository.findById(userId)
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        List<Reservation> reservations = reservationRepository.findByUserOrderByStartTimeDesc(user);
+        // USER → solo ver las suyas
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes ver reservas de otro usuario.");
+        }
 
-        return reservations.stream()
-                .map(this::toDTO)
-                .collect(Collectors.toList());
+        // ADMIN → solo dentro de su ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        List<Reservation> reservations = reservationRepository.findByUserOrderByStartTimeDesc(target);
+
+        return reservations.stream().map(this::toDTO).toList();
     }
+
 
     @Transactional(readOnly = true)
     public List<ReservationDTO> getPendingReservations(Long userId) {
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // USER → solo las suyas
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes ver reservas pendientes de otro usuario.");
+        }
+
+        // ADMIN → solo dentro de su ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target);
+        }
+
         // 🔹 Obtener las reservas del usuario con estado PENDING
         List<Reservation> pendientes = reservationRepository.findByUser_IdAndStatus(userId, ReservationStatus.PENDING);
 
@@ -612,15 +769,37 @@ public class ReservationService {
 
     /** 🔹 Devuelve los jugadores de una reserva con su estado */
     public List<ReservationPlayerDTO> getJugadoresPorReserva(Long reservationId) {
-        Reservation reserva = reservationRepository.findById(reservationId)
+        Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new RuntimeException("Reserva no encontrada"));
+
+        User current = authService.getCurrentUser();
+
+        // Superadmin → full
+        if (!authService.isSuperAdmin()) {
+
+            // Admin → mismo ayuntamiento
+            if (authService.isAdmin()) {
+                authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
+            }
+
+            // User → solo si participa o si fue invitado o si es pública
+            boolean puedeVer =
+                    reservation.isPublic() ||
+                            reservation.getUser().getId().equals(current.getId()) ||
+                            reservation.getJugadores().stream().anyMatch(j -> j.getId().equals(current.getId())) ||
+                            invitationRepository.existsByReservationIdAndReceiverId(reservationId, current.getId());
+
+            if (!puedeVer) {
+                throw new AccessDeniedException("No tienes permiso para ver los jugadores de esta reserva.");
+            }
+        }
 
         List<ReservationPlayerDTO> jugadores = new ArrayList<>();
 
         // ✅ Añadir el creador de la reserva (siempre aceptado)
         jugadores.add(new ReservationPlayerDTO(
-                reserva.getUser().getUsername(),
-                reserva.getUser().getFullName(),
+                reservation.getUser().getUsername(),
+                reservation.getUser().getFullName(),
                 "ACEPTADA"
         ));
 
@@ -652,10 +831,22 @@ public class ReservationService {
         return reservations.stream().map(this::toDTO).collect(Collectors.toList());
     }
 
+    public int getConfirmedReservationsCount(Long userId) {
+        return reservationRepository.countConfirmedByUserId(userId);
+    }
+
     @Transactional
     public String joinPublicReservation(Long reservationId, Long userId) {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new RuntimeException("Reserva no encontrada."));
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
+
+        // Validación multi-ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
+        }
 
         if (!reservation.isPublic()) {
             throw new RuntimeException("Esta reserva no es pública.");
@@ -672,9 +863,6 @@ public class ReservationService {
         if (reservation.getJugadores().size() >= 4) {
             throw new RuntimeException("La reserva ya está completa (máximo 4 jugadores).");
         }
-
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
 
         // Evitar que el creador se una dos veces
         if (reservation.getUser().getId().equals(user.getId())) {
@@ -703,6 +891,11 @@ public class ReservationService {
 
         User user = userRepository.findByUsernameOrEmail(principalName)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + principalName));
+
+        // Multi-ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
+        }
 
         boolean estaEnReserva = reservation.getJugadores().stream()
                 .anyMatch(u -> u.getId().equals(user.getId()));
@@ -739,7 +932,21 @@ public class ReservationService {
 
     @Transactional(readOnly = true)
     public List<ReservationDTO> getAvailablePublicReservations(Long currentUserId) {
+
+        User current = authService.getCurrentUser();
         LocalDateTime now = LocalDateTime.now();
+
+        List<Reservation> reservations;
+
+        if (authService.isSuperAdmin()) {
+            reservations = reservationRepository.findPublicAvailableReservations(now);
+        } else {
+            reservations = reservationRepository.findPublicAvailableReservationsByAyuntamiento(
+                    now,
+                    current.getAyuntamiento().getId()
+            );
+        }
+
         List<Reservation> publicReservations = reservationRepository.findPublicAvailableReservations(now);
 
         return publicReservations.stream().map(res -> {

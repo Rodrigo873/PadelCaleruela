@@ -29,6 +29,11 @@ public class Friendship {
 
     private LocalDateTime createdAt;
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
     @PrePersist
     public void prePersist() {
         createdAt = LocalDateTime.now();

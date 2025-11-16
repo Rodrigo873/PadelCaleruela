@@ -1,15 +1,12 @@
 package com.example.PadelCaleruela.service;
 
-
 import com.example.PadelCaleruela.dto.LeagueTeamRankingDTO;
 import com.example.PadelCaleruela.dto.LeagueTeamRankingViewDTO;
-import com.example.PadelCaleruela.model.League;
-import com.example.PadelCaleruela.model.LeagueStatus;
-import com.example.PadelCaleruela.model.LeagueMatch;
-import com.example.PadelCaleruela.model.MatchStatus;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.LeagueMatchRepository;
 import com.example.PadelCaleruela.repository.LeagueRepository;
 import jakarta.mail.MessagingException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,22 +19,63 @@ public class LeagueCompletionService {
     private final LeagueMatchRepository matchRepository;
     private final LeagueTeamRankingService rankingService;
     private final EmailService emailService;
+    private final AuthService authService;
 
-    public LeagueCompletionService(LeagueRepository leagueRepository,
-                                   LeagueMatchRepository matchRepository,
-                                   LeagueTeamRankingService rankingService,
-                                   EmailService emailService) {
+    public LeagueCompletionService(
+            LeagueRepository leagueRepository,
+            LeagueMatchRepository matchRepository,
+            LeagueTeamRankingService rankingService,
+            EmailService emailService,
+            AuthService authService
+    ) {
         this.leagueRepository = leagueRepository;
         this.matchRepository = matchRepository;
         this.rankingService = rankingService;
         this.emailService = emailService;
+        this.authService = authService;
     }
 
-    /** Comprueba si una liga ha finalizado y envía correo al creador si es así */
+    // ============================================================
+    // 🔐 SEGURIDAD
+    // ============================================================
+
+    private void ensureCanCompleteLeague(League league) {
+        var current = authService.getCurrentUser();
+
+        if (authService.isSuperAdmin()) return;
+
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            return;
+        }
+
+        // USER → solo el creador
+        if (authService.isUser()) {
+            if (league.getCreator() == null ||
+                    !league.getCreator().getId().equals(current.getId())) {
+                throw new AccessDeniedException("No puedes completar esta liga.");
+            }
+            return;
+        }
+
+        throw new AccessDeniedException("No tienes permiso para completar esta liga.");
+    }
+
+    // ============================================================
+    // 🏁 COMPLETAR LIGA
+    // ============================================================
+
+    /**
+     * Comprueba si todos los partidos han acabado.
+     * Si es así → marca la liga como FINISHED y envía un email al creador.
+     */
     @Transactional
     public void checkAndCompleteLeague(Long leagueId) {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
+
+        // 🔐 Seguridad
+        ensureCanCompleteLeague(league);
 
         if (league.getStatus() == LeagueStatus.FINISHED) return;
 
@@ -46,16 +84,18 @@ public class LeagueCompletionService {
 
         boolean allFinished = matches.stream()
                 .allMatch(m -> m.getStatus() == MatchStatus.FINISHED);
+
         if (!allFinished) return;
 
+        // 🏁 Marcar liga como finalizada
         league.setStatus(LeagueStatus.FINISHED);
         leagueRepository.save(league);
 
-        // ✅ Nuevo ranking completo
+        // Obtener ranking final
         List<LeagueTeamRankingViewDTO> viewRanking = rankingService.getRanking(leagueId);
         LeagueTeamRankingViewDTO viewChampion = viewRanking.isEmpty() ? null : viewRanking.get(0);
 
-        // 🔄 Convertir a los tipos antiguos para el email (LeagueTeamRankingDTO)
+        // Convertir a DTOs antiguos para email
         List<LeagueTeamRankingDTO> ranking = viewRanking.stream()
                 .map(v -> new LeagueTeamRankingDTO(
                         v.getTeamId(),
@@ -67,27 +107,31 @@ public class LeagueCompletionService {
                 ))
                 .toList();
 
-        LeagueTeamRankingDTO champion = viewChampion == null ? null : new LeagueTeamRankingDTO(
-                viewChampion.getTeamId(),
-                viewChampion.getPlayers().stream().map(p -> p.getUsername()).toList(),
-                viewChampion.getMatchesPlayed(),
-                viewChampion.getMatchesWon(),
-                viewChampion.getMatchesLost(),
-                viewChampion.getPoints()
-        );
+        LeagueTeamRankingDTO champion = viewChampion == null ? null :
+                new LeagueTeamRankingDTO(
+                        viewChampion.getTeamId(),
+                        viewChampion.getPlayers().stream().map(p -> p.getUsername()).toList(),
+                        viewChampion.getMatchesPlayed(),
+                        viewChampion.getMatchesWon(),
+                        viewChampion.getMatchesLost(),
+                        viewChampion.getPoints()
+                );
 
-        try {
-            String subject = "🏆 Tu liga '" + league.getName() + "' ha finalizado";
-            String html = buildLeagueCompletedEmail(league, champion, ranking);
-            emailService.sendHtmlEmail(league.getCreator().getEmail(), subject, html);
-        } catch (MessagingException e) {
-            throw new RuntimeException("Error enviando email de finalización: " + e.getMessage(), e);
-        }
+        // 📩 Enviar correo al creador
+        String subject = "🏆 Tu liga '" + league.getName() + "' ha finalizado";
+        String html = buildLeagueCompletedEmail(league, champion, ranking);
+        emailService.sendHtmlEmail(league.getCreator().getEmail(), subject, html);
     }
 
+    // ============================================================
+    // 📧 GENERADOR DE EMAIL
+    // ============================================================
 
-    /** 📨 Genera el contenido HTML del correo */
-    private String buildLeagueCompletedEmail(League league, LeagueTeamRankingDTO champion, List<LeagueTeamRankingDTO> ranking) {
+    private String buildLeagueCompletedEmail(
+            League league,
+            LeagueTeamRankingDTO champion,
+            List<LeagueTeamRankingDTO> ranking
+    ) {
         StringBuilder html = new StringBuilder();
         html.append("<html><body style='font-family:Arial,sans-serif;color:#333;'>");
         html.append("<h2>🏁 ¡La liga <strong>").append(league.getName()).append("</strong> ha finalizado!</h2>");
@@ -104,12 +148,14 @@ public class LeagueCompletionService {
 
         html.append("<hr><h4>Clasificación final:</h4>");
         html.append("<table style='border-collapse:collapse;width:100%;'>");
-        html.append("<tr><th style='border:1px solid #ddd;padding:8px;'>Posición</th>")
+        html.append("<tr>")
+                .append("<th style='border:1px solid #ddd;padding:8px;'>Posición</th>")
                 .append("<th style='border:1px solid #ddd;padding:8px;'>Pareja</th>")
                 .append("<th style='border:1px solid #ddd;padding:8px;'>PJ</th>")
                 .append("<th style='border:1px solid #ddd;padding:8px;'>PG</th>")
                 .append("<th style='border:1px solid #ddd;padding:8px;'>PP</th>")
-                .append("<th style='border:1px solid #ddd;padding:8px;'>Puntos</th></tr>");
+                .append("<th style='border:1px solid #ddd;padding:8px;'>Puntos</th>")
+                .append("</tr>");
 
         for (int i = 0; i < ranking.size(); i++) {
             LeagueTeamRankingDTO r = ranking.get(i);

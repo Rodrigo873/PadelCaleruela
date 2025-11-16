@@ -16,8 +16,17 @@ import java.util.Optional;
 public interface InvitationRepository extends JpaRepository<Invitation, Long> {
     List<Invitation> findByReceiverAndStatus(User receiver, InvitationStatus status);
     List<Invitation> findByReservationId(Long reservationId);
-
     Optional<Invitation> findByReservationAndReceiver(Reservation reservation, User receiver);
+    boolean existsByReservationIdAndReceiverId(Long reservationId, Long receiverId);
+
+    @Query("""
+        SELECT COUNT(i)
+        FROM Invitation i
+        WHERE i.receiver.id = :userId
+          AND i.status = 'PENDING'
+    """)
+    long countPendingByUserId(@Param("userId") Long userId);
+
     // Última invitación PENDING de ese usuario para esa reserva (por si hubiese varias históricas)
     Optional<Invitation> findTopByReservation_IdAndReceiver_IdAndStatusOrderByIdDesc(
             Long reservationId,

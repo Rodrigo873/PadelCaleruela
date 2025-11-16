@@ -50,6 +50,11 @@ public class LeagueMatch {
 
     private Integer jornada;
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
 
     // --- Métodos de ayuda ---
     public boolean isCompleted() {

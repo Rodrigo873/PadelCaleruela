@@ -26,5 +26,7 @@ public class PaymentDTO {
     private String providerReceiptUrl;
     private String cardBrand;
     private String cardLast4;
+    private String providerAccountId;
+    private String stripeAccountId;
 
 }

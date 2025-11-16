@@ -11,6 +11,15 @@ public interface LeagueRepository extends JpaRepository<League, Long> {
     List<League> findByIsPublicTrue();
     List<League> findByCreator(User creator);
 
+    @Query("SELECT l FROM League l WHERE l.status = 'ACTIVE' AND l.isPublic = true AND l.ayuntamiento.id = :ayId")
+    List<League> findAllActivePublicLeaguesByAyuntamiento(Long ayId);
+
+    @Query("SELECT l FROM League l " +
+            "WHERE l.isPublic = true " +
+            "AND l.status = 'PENDING' " +
+            "AND l.ayuntamiento.id = :ayId")
+    List<League> findAllPublicPendingLeaguesByAyuntamiento(Long ayId);
+
     @Query("SELECT l FROM League l WHERE l.status = 'ACTIVE' AND l.isPublic = true")
     List<League> findAllActivePublicLeagues();
 

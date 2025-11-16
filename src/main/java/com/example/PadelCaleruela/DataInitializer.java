@@ -28,10 +28,10 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) {
         // Si no existe ningún administrador, crear uno
-        if (userRepository.findByUsername("admin").isEmpty()) {
+        if (userRepository.findByUsername("superadmin").isEmpty()) {
             User admin = new User();
-            admin.setUsername("admin");
-            admin.setFullName("Administrador Padel");
+            admin.setUsername("superadmin");
+            admin.setFullName("Super Administrador Padel");
             admin.setEmail("rodrigorinconparra@gmail.com");
             // 🔤 Conjunto de caracteres válidos
             final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -49,24 +49,24 @@ public class DataInitializer implements CommandLineRunner {
             // 🔐 Cifrar antes de guardar
             admin.setPassword(passwordEncoder.encode(generatedPassword));
 
-            admin.setRole(Role.ADMIN);
-            admin.setStatus(UserStatus.ACTIVE);
+            admin.setRole(Role.SUPERADMIN);
+            admin.setStatus(UserStatus.OFFLINE);
 
             userRepository.save(admin);
+            String html =
+                    "<html><body>" +
+                            "<h3>¡Hola " + admin.getUsername() + "!</h3>" +
+                            "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>" +
+                            "<p>Se te ha asignado una contraseña al azar, puedes cambiarla desde la app.</p>" +
+                            "<p>La contraseña es: <strong>" + generatedPassword + "</strong></p>" +
+                            "</body></html>";
 
-            try {
-                emailService.sendHtmlEmail(
-                        admin.getEmail(),
-                        "Usuario admin creado correctamente",
-                        "<h3>¡Hola " + admin.getUsername() + "!</h3>" +
-                                "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>"+
-                                "<p>Se te ha asignado una contraseña al azar, puedes cambiarla desde la app.</p>"+
-                                "<p>La contraseña es="+generatedPassword+"</p>"
-                );
-            } catch (MessagingException e) {
-                // ⚠️ Evita que la app crashee si el correo falla
-                System.err.println("Error al enviar el correo: " + e.getMessage());
-            }
+            emailService.sendHtmlEmail(
+                    admin.getEmail(),
+                    "Usuario super admin creado correctamente",
+                    html
+            );
+
 
         } else {
         }

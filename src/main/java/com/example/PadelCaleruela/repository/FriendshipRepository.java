@@ -15,6 +15,24 @@ public interface FriendshipRepository extends JpaRepository<Friendship,Long> {
     // Lista todas las amistades aceptadas donde el usuario participa (como from o to)
     Optional<Friendship> findByUserAndFriend(User user, User friend);
 
+    // Seguidores → los que SIGUEN al usuario
+    @Query("SELECT COUNT(f) FROM Friendship f " +
+            "WHERE f.friend.id = :userId AND f.status = 'ACCEPTED'")
+    int countFollowers(@Param("userId") Long userId);
+
+    // Seguidos → a quienes el usuario sigue
+    @Query("SELECT COUNT(f) FROM Friendship f " +
+            "WHERE f.user.id = :userId AND f.status = 'ACCEPTED'")
+    int countFollowing(@Param("userId") Long userId);
+
+    @Query("""
+        SELECT COUNT(f) 
+        FROM Friendship f 
+        WHERE 
+            f.friend.id = :userId 
+            AND f.status = com.example.PadelCaleruela.model.FriendshipStatus.PENDING
+    """)
+    long countPendingByUserId(@Param("userId") Long userId);
     @Query("""
         SELECT f FROM Friendship f
         WHERE (f.user.id = :userId OR f.friend.id = :userId)

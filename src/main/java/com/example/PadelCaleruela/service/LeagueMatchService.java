@@ -3,6 +3,7 @@ package com.example.PadelCaleruela.service;
 import com.example.PadelCaleruela.dto.*;
 import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.*;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,22 +21,46 @@ public class LeagueMatchService {
     private final LeagueRankingService leagueRankingService;
     private final LeagueTeamRepository teamRepository;
     private final LeagueTeamRankingService teamRankingService;
+    private final AuthService authService;
 
-    public LeagueMatchService(LeagueMatchRepository matchRepository, LeagueRepository leagueRepository,
-                              UserRepository userRepository,LeagueRankingService leagueRankingService,
-                              LeagueTeamRankingService teamRankingService,LeagueTeamRepository teamRepository) {
+    public LeagueMatchService(LeagueMatchRepository matchRepository,
+                              LeagueRepository leagueRepository,
+                              UserRepository userRepository,
+                              LeagueRankingService leagueRankingService,
+                              LeagueTeamRankingService teamRankingService,
+                              LeagueTeamRepository teamRepository,
+                              AuthService authService) {
         this.matchRepository = matchRepository;
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
-        this.leagueRankingService=leagueRankingService;
-        this.teamRepository=teamRepository;
-        this.teamRankingService=teamRankingService;
+        this.leagueRankingService = leagueRankingService;
+        this.teamRepository = teamRepository;
+        this.teamRankingService = teamRankingService;
+        this.authService = authService;
     }
 
-    @Transactional  //Cambiar metodo, crear un DTO para enviar desde el frontend solo los id de los equipos
+    // 🆕 Crear partido de liga (solo creador de la liga, ADMIN de ese ayuntamiento o SUPERADMIN)
+    @Transactional
     public LeagueMatchDTO createMatch(LeagueMatchDTO dto) {
         League league = leagueRepository.findById(dto.getLeagueId())
                 .orElseThrow(() -> new RuntimeException("League not found"));
+
+        User current = authService.getCurrentUser();
+
+        // 🔐 Multi-ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        }
+
+        boolean isCreator = league.getCreator() != null &&
+                league.getCreator().getId().equals(current.getId());
+
+        // USER → solo si es creador de la liga
+        if (authService.isUser() && !isCreator) {
+            throw new AccessDeniedException("No puedes crear partidos en una liga que no has creado.");
+        }
+        // ADMIN → ya está limitado por ayuntamiento, permitido
+        // SUPERADMIN → permitido
 
         // 🔹 Buscar los equipos según los jugadores enviados
         Long player1Id = dto.getTeam1().get(0).getId();
@@ -47,7 +72,6 @@ public class LeagueMatchService {
         LeagueTeam team2 = teamRepository.findByPlayerAndLeague(player2Id, league.getId())
                 .orElseThrow(() -> new RuntimeException("Team 2 not found for player " + player2Id));
 
-        // 🔹 Crear el partido
         LeagueMatch match = new LeagueMatch();
         match.setLeague(league);
         match.setTeam1(team1);
@@ -60,14 +84,32 @@ public class LeagueMatchService {
         return mapToDto(saved);
     }
 
-
-
-
-
+    // 🔍 Partidos de una liga (visibles:
+    // - SUPERADMIN → todos
+    // - ADMIN → ligas de su ayuntamiento
+    // - USER → si la liga es pública o participa en ella o es el creador)
     @Transactional(readOnly = true)
     public List<LeagueMatchDTO> getMatchesByLeague(Long leagueId) {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
+
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
+            boolean isCreator = league.getCreator() != null &&
+                    league.getCreator().getId().equals(current.getId());
+
+            boolean isPlayer = league.getPlayers().stream()
+                    .anyMatch(p -> p.getId().equals(current.getId()));
+
+            if (authService.isUser() &&
+                    !Boolean.TRUE.equals(league.getIsPublic()) &&
+                    !isCreator && !isPlayer) {
+                throw new AccessDeniedException("No puedes ver los partidos de esta liga privada.");
+            }
+        }
 
         return matchRepository.findByLeague(league)
                 .stream()
@@ -80,7 +122,23 @@ public class LeagueMatchService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        // 🟢 Todos los partidos pendientes (aunque ya haya pasado la fecha)
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
+            boolean isCreator = league.getCreator() != null &&
+                    league.getCreator().getId().equals(current.getId());
+            boolean isPlayer = league.getPlayers().stream()
+                    .anyMatch(p -> p.getId().equals(current.getId()));
+
+            if (authService.isUser() &&
+                    !Boolean.TRUE.equals(league.getIsPublic()) &&
+                    !isCreator && !isPlayer) {
+                throw new AccessDeniedException("No puedes ver los partidos de esta liga privada.");
+            }
+        }
+
         return matchRepository.findByLeagueAndStatus(league, MatchStatus.SCHEDULED)
                 .stream()
                 .map(this::mapToDto)
@@ -92,16 +150,30 @@ public class LeagueMatchService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        // ✅ Solo los que ya se jugaron
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
+            boolean isCreator = league.getCreator() != null &&
+                    league.getCreator().getId().equals(current.getId());
+            boolean isPlayer = league.getPlayers().stream()
+                    .anyMatch(p -> p.getId().equals(current.getId()));
+
+            if (authService.isUser() &&
+                    !Boolean.TRUE.equals(league.getIsPublic()) &&
+                    !isCreator && !isPlayer) {
+                throw new AccessDeniedException("No puedes ver los partidos de esta liga privada.");
+            }
+        }
+
         return matchRepository.findByLeagueAndStatus(league, MatchStatus.FINISHED)
                 .stream()
                 .map(this::mapToDto)
                 .toList();
     }
 
-
-
-
+    // ✅ Actualizar resultado + ranking (solo creador de liga, ADMIN o SUPERADMIN)
     @Transactional
     public Map<String, Object> updateResultAndRanking(
             Long matchId,
@@ -109,6 +181,38 @@ public class LeagueMatchService {
     ) {
         LeagueMatch match = matchRepository.findById(matchId)
                 .orElseThrow(() -> new RuntimeException("Match not found"));
+
+        League league = match.getLeague();
+        User current = authService.getCurrentUser();
+
+        // === ⚠️ AUTORIZACIÓN ===
+
+        // SUPERADMIN → permitido siempre
+        if (!authService.isSuperAdmin()) {
+
+            // ADMIN → solo si pertenece al mismo ayuntamiento
+            if (authService.isAdmin()) {
+                authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            }
+
+            // USER → solo si pertenece al PARTIDO
+            if (authService.isUser()) {
+
+                boolean isInTeam1 = match.getTeam1().getPlayers()
+                        .stream()
+                        .anyMatch(p -> p.getId().equals(current.getId()));
+
+                boolean isInTeam2 = match.getTeam2().getPlayers()
+                        .stream()
+                        .anyMatch(p -> p.getId().equals(current.getId()));
+
+                if (!isInTeam1 && !isInTeam2) {
+                    throw new AccessDeniedException(
+                            "No puedes modificar resultados de un partido en el que no estás inscrito."
+                    );
+                }
+            }
+        }
 
         LeagueTeam team1 = match.getTeam1();
         LeagueTeam team2 = match.getTeam2();
@@ -140,7 +244,6 @@ public class LeagueMatchService {
             else if (team2Games > team1Games) team2SetsWon++;
         }
 
-        // 🏁 Actualiza resultado global
         match.setTeam1Score(team1SetsWon);
         match.setTeam2Score(team2SetsWon);
         match.setStatus(MatchStatus.FINISHED);
@@ -154,17 +257,12 @@ public class LeagueMatchService {
         // ✅ Revisa si la liga ha terminado
         checkAndFinalizeLeague(match.getLeague());
 
-        // 📦 Devuelve respuesta
         Map<String, Object> response = new HashMap<>();
         response.put("match", mapToViewDto(match));
         response.put("ranking", updatedRanking);
         return response;
     }
 
-    /**
-     * 🔹 Comprueba si todos los partidos de la liga están FINALIZADOS.
-     * Si es así, cambia el estado de la liga a FINISHED automáticamente.
-     */
     @Transactional
     private void checkAndFinalizeLeague(League league) {
         long totalMatches = matchRepository.countByLeague(league);
@@ -178,12 +276,26 @@ public class LeagueMatchService {
         }
     }
 
-
-
+    // 🔁 Reprogramar partido (mismas reglas que para actualizar resultado)
     @Transactional
     public void rescheduleMatch(Long matchId, LocalDateTime newDate) {
         LeagueMatch match = matchRepository.findById(matchId)
                 .orElseThrow(() -> new RuntimeException("Match not found"));
+
+        League league = match.getLeague();
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        }
+
+        boolean isCreator = league.getCreator() != null &&
+                league.getCreator().getId().equals(current.getId());
+
+        if (authService.isUser() && !isCreator) {
+            throw new AccessDeniedException("No puedes reprogramar partidos en una liga que no has creado.");
+        }
+
         match.setScheduledDate(newDate);
         match.setStatus(MatchStatus.POSTPONED);
         matchRepository.save(match);
@@ -199,7 +311,7 @@ public class LeagueMatchService {
         dto.setTeam1Score(match.getTeam1Score());
         dto.setTeam2Score(match.getTeam2Score());
         dto.setJornada(match.getJornada());
-        // 🔹 Obtener jugadores del equipo 1
+
         if (match.getTeam1() != null) {
             dto.setTeam1(
                     match.getTeam1().getPlayers().stream()
@@ -213,7 +325,6 @@ public class LeagueMatchService {
             );
         }
 
-        // 🔹 Obtener jugadores del equipo 2
         if (match.getTeam2() != null) {
             dto.setTeam2(
                     match.getTeam2().getPlayers().stream()
@@ -227,7 +338,6 @@ public class LeagueMatchService {
             );
         }
 
-        // 🆕 Mapea los sets si existen
         if (match.getSets() != null && !match.getSets().isEmpty()) {
             List<MatchSetDTO> setDtos = match.getSets().stream()
                     .map(s -> {
@@ -243,7 +353,6 @@ public class LeagueMatchService {
 
         return dto;
     }
-
 
     private LeagueMatchViewDTO mapToViewDto(LeagueMatch match) {
         LeagueMatchViewDTO dto = new LeagueMatchViewDTO();
@@ -269,8 +378,6 @@ public class LeagueMatchService {
         dto.setPlayedDate(match.getPlayedDate());
         dto.setJornada(match.getJornada());
 
-
         return dto;
     }
-
 }

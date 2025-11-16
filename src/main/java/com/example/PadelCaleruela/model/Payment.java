@@ -1,4 +1,3 @@
-// Payment.java
 package com.example.PadelCaleruela.model;
 
 import jakarta.persistence.*;
@@ -14,7 +13,8 @@ public class Payment {
     public enum Provider { FAKE, STRIPE, PAYPAL }
     public enum Status { PENDING, SUCCEEDED, FAILED, CANCELED }
 
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @OneToOne
@@ -34,28 +34,32 @@ public class Payment {
     private Status status = Status.PENDING;
 
     @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal amount; // precio total
+    private BigDecimal amount;
 
     @Column
     private String currency = "EUR";
 
     @Column
-    private String paymentReference; // id de pasarela (client_secret, orderId, etc.)
-
-    // Payment.java
-    @Column
-    private String paymentIntentId;  // id real de Stripe
+    private String paymentReference; // client_secret u otro identificador
 
     @Column
-    private String paymentMethodId;  // último PM usado (snapshot)
+    private String paymentIntentId;
 
     @Column
-    private String providerReceiptUrl; // URL recibo Stripe (útil para soporte)
+    private String paymentMethodId;
 
     @Column
-    private String cardBrand;  // snapshot para mostrar al user
+    private String providerReceiptUrl;
+
+    @Column
+    private String cardBrand;
+
     @Column
     private String cardLast4;
+
+    // 🆕 CRÍTICO PARA MULTI-TENANT STRIPE CONNECT
+    @Column(name = "provider_account_id")
+    private String providerAccountId;  // ej: acct_1QabcXYZ
 
 
     @Column(nullable = false, updatable = false)
@@ -63,6 +67,11 @@ public class Payment {
 
     @Column
     private LocalDateTime updatedAt;
+
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento; // si quieres mantener relación directa también
+
 
     @PrePersist
     public void prePersist() {

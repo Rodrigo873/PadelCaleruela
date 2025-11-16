@@ -2,6 +2,8 @@ package com.example.PadelCaleruela.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -18,6 +20,8 @@ public class ReservationDTO {
     private String status;
     @JsonProperty("isPublic")
     private boolean isPublic;
+    private BigDecimal precio;
+
 
 
 }

@@ -13,12 +13,21 @@ import java.util.Optional;
 
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
 
+    List<Reservation> findByStartTimeBetweenAndAyuntamientoId(
+            LocalDateTime start, LocalDateTime end, Long ayuntamientoId);
+    @Query("SELECT r FROM Reservation r WHERE r.isPublic = true AND r.startTime > :now AND r.ayuntamiento.id = :ayId")
+    List<Reservation> findPublicAvailableReservationsByAyuntamiento(LocalDateTime now, Long ayId);
+    List<Reservation> findByAyuntamientoId(Long ayuntamientoId);
+
     @Query("""
-    SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END
-    FROM Reservation r
-    WHERE (r.startTime < :end AND r.endTime > :start)
-""")
-    boolean existsByTimeRange(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+    SELECT COUNT(r) 
+    FROM Reservation r 
+    LEFT JOIN r.jugadores j
+    WHERE (r.user.id = :userId OR j.id = :userId)
+    AND r.status = 'CONFIRMED'
+    """)
+    int countConfirmedByUserId(@Param("userId") Long userId);
+
 
     List<Reservation> findByUserOrderByStartTimeDesc(User user);
     Optional<Reservation> findFirstByStartTimeAndStatusNotAndIsPublicTrue(

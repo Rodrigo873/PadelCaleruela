@@ -36,6 +36,10 @@ public class LeagueTeam {
     @OneToMany(mappedBy = "team2")
     private Set<LeagueMatch> awayMatches = new HashSet<>();
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
 
     // dentro de LeagueTeam.java
     public boolean isFull() {

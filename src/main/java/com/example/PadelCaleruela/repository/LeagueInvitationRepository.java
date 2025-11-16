@@ -5,6 +5,8 @@ import com.example.PadelCaleruela.model.League;
 import com.example.PadelCaleruela.model.LeagueInvitation;
 import com.example.PadelCaleruela.model.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -16,8 +18,14 @@ public interface LeagueInvitationRepository extends JpaRepository<LeagueInvitati
             Long receiverId,
             InvitationStatus status
     );
-    List<LeagueInvitation> findByReceiverAndStatus(User receiver, InvitationStatus status);
-    List<LeagueInvitation> findBySender(User sender);
-    List<LeagueInvitation> findByLeague_Id(Long leagueId);
+
+
+    // Todas las invitaciones PENDIENTES de un usuario
+    List<LeagueInvitation> findByReceiverIdAndStatus(Long receiverId, InvitationStatus status);
+
+    // Número de invitaciones PENDIENTES de un usuario
+    long countByReceiverIdAndStatus(Long receiverId, InvitationStatus status);
+
+
     boolean existsByLeague_IdAndReceiver_Id(Long leagueId, Long receiverId);
 }

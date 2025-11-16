@@ -1,6 +1,8 @@
 package com.example.PadelCaleruela.controller;
 
 import com.example.PadelCaleruela.dto.AuthResponse;
+import com.example.PadelCaleruela.dto.UserDTO;
+import com.example.PadelCaleruela.dto.UserRegister;
 import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.service.AuthService;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +19,7 @@ public class AuthController {
     private final AuthService authService;
 
     @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@RequestBody User user) {
+    public ResponseEntity<AuthResponse> register(@RequestBody UserRegister user) {
         AuthResponse response = authService.register(user);
         return ResponseEntity.ok(response);
     }

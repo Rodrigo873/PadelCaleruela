@@ -8,6 +8,7 @@ import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.repository.FriendshipRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,69 +23,128 @@ public class FriendshipService {
 
     private final FriendshipRepository friendshipRepository;
     private final UserRepository userRepository;
+    private final AuthService authService;
+
 
     // 🔹 Enviar solicitud de amistad
     public void sendFriendRequest(Long fromUserId, Long toUserId) {
-        if (fromUserId.equals(toUserId)) return; // Evitar auto-seguirse
 
-        User from = userRepository.findById(fromUserId).orElseThrow();
-        User to = userRepository.findById(toUserId).orElseThrow();
+        User current = authService.getCurrentUser();
 
-        Optional<Friendship> existingOpt = friendshipRepository.findByUserIdAndFriendId(fromUserId, toUserId);
+        User from = userRepository.findById(fromUserId)
+                .orElseThrow(() -> new RuntimeException("Usuario origen no encontrado"));
+
+        User to = userRepository.findById(toUserId)
+                .orElseThrow(() -> new RuntimeException("Usuario destino no encontrado"));
+
+        // USER → solo puede enviar su propia solicitud
+        if (authService.isUser() && !current.getId().equals(fromUserId)) {
+            throw new RuntimeException("No puedes enviar solicitudes en nombre de otro usuario.");
+        }
+
+        // ADMIN → solo si ambos usuarios pertenecen a su ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(from.getAyuntamiento());
+            authService.ensureSameAyuntamiento(to.getAyuntamiento());
+        }
+
+        // SUPERADMIN → sin restricciones
+
+        if (fromUserId.equals(toUserId)) return;
+
+        Optional<Friendship> existingOpt =
+                friendshipRepository.findByUserIdAndFriendId(fromUserId, toUserId);
 
         if (existingOpt.isPresent()) {
             Friendship existing = existingOpt.get();
 
-            // ✅ Si fue rechazado previamente, se puede reenviar
             if (existing.getStatus() == FriendshipStatus.REJECTED) {
                 existing.setStatus(FriendshipStatus.PENDING);
                 friendshipRepository.save(existing);
                 return;
             }
 
-            // 🚫 Si ya está pendiente o aceptado, no reenviar
-            if (existing.getStatus() == FriendshipStatus.PENDING || existing.getStatus() == FriendshipStatus.ACCEPTED) {
-                return;
+            if (existing.getStatus() == FriendshipStatus.PENDING
+                    || existing.getStatus() == FriendshipStatus.ACCEPTED) {
+                return; // ya existe
             }
-
-        } else {
-            // 🆕 Crear nueva solicitud si no existía
-            Friendship f = new Friendship();
-            f.setUser(from);
-            f.setFriend(to);
-            f.setStatus(FriendshipStatus.PENDING);
-            friendshipRepository.save(f);
         }
+
+        Friendship f = new Friendship();
+        f.setUser(from);
+        f.setFriend(to);
+        f.setStatus(FriendshipStatus.PENDING);
+        friendshipRepository.save(f);
     }
+
 
     /**
      * 🔹 Seguidores (usuarios que siguen al userId)
      */
-    public List<UserDTO> getFollowers(Long userId) {
-        List<User> followers = friendshipRepository.findFollowersByUserId(userId);
-        return followers.stream().map(this::toDTO).collect(Collectors.toList());
+    public int getFollowersCount(Long userId) {
+
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // ADMIN → debe respetar ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target.getAyuntamiento());
+        }
+
+        return friendshipRepository.countFollowers(userId);
     }
+
+
+
 
     /**
      * 🔹 Usuarios seguidos (a quienes sigue el userId)
      */
-    public List<UserDTO> getFollowing(Long userId) {
-        List<User> following = friendshipRepository.findFollowingByUserId(userId);
-        return following.stream().map(this::toDTO).collect(Collectors.toList());
+    public int getFollowingCount(Long userId) {
+
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // ADMIN → debe respetar ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target.getAyuntamiento());
+        }
+
+        return friendshipRepository.countFollowing(userId);
     }
+
+
 
 
     // 🔹 Aceptar solicitud de amistad
     @Transactional
     public void acceptFriendRequest(Long userId, Long friendId) {
-        // 🧠 IMPORTANTE: buscamos la solicitud donde el otro (friendId) fue quien la envió
+
+        User current = authService.getCurrentUser();
+
+        User receiver = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario receptor no encontrado"));
+
+        User sender = userRepository.findById(friendId)
+                .orElseThrow(() -> new RuntimeException("Usuario origen no encontrado"));
+
+        // USER → solo aceptar sus propias solicitudes
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new RuntimeException("No puedes aceptar solicitudes dirigidas a otro usuario.");
+        }
+
+        // ADMIN → solo en su ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
+            authService.ensureSameAyuntamiento(sender.getAyuntamiento());
+        }
+
         Friendship f = friendshipRepository
                 .findByUserIdAndFriendId(friendId, userId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "No existe una solicitud (PENDING) de user_id=" + friendId + " a friend_id=" + userId));
+                .orElseThrow(() -> new IllegalArgumentException("No existe una solicitud pendiente."));
 
         if (f.getStatus() != FriendshipStatus.PENDING) {
-            throw new IllegalStateException("La solicitud no está en estado PENDING.");
+            throw new RuntimeException("La solicitud no está pendiente.");
         }
 
         f.setStatus(FriendshipStatus.ACCEPTED);
@@ -95,23 +155,29 @@ public class FriendshipService {
 
 
 
+
     //rechazar
     public void rejectFriendRequest(Long userId, Long senderId) {
-        // Buscar la solicitud que envió el "sender" al "user"
-        Friendship friendship = friendshipRepository.findByUserAndFriend(
-                userRepository.findById(senderId)
-                        .orElseThrow(() -> new RuntimeException("Usuario que envió la solicitud no encontrado.")),
-                userRepository.findById(userId)
-                        .orElseThrow(() -> new RuntimeException("Usuario que recibe la solicitud no encontrado."))
-        ).orElseThrow(() -> new RuntimeException("No existe una solicitud pendiente de este usuario."));
 
-        // Verificar que esté pendiente
-        if (friendship.getStatus() == FriendshipStatus.ACCEPTED) {
-            throw new IllegalStateException("Esta solicitud ya fue aceptada.");
+        User current = authService.getCurrentUser();
+
+        User receiver = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario receptor no encontrado"));
+
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new RuntimeException("Usuario origen no encontrado"));
+
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new RuntimeException("No puedes rechazar solicitudes de otro.");
         }
-        if (friendship.getStatus() == FriendshipStatus.REJECTED) {
-            throw new IllegalStateException("Esta solicitud ya fue rechazada.");
+
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
+            authService.ensureSameAyuntamiento(sender.getAyuntamiento());
         }
+
+        Friendship friendship = friendshipRepository.findByUserAndFriend(sender, receiver)
+                .orElseThrow(() -> new RuntimeException("No existe una solicitud pendiente."));
 
         friendship.setStatus(FriendshipStatus.REJECTED);
         friendshipRepository.save(friendship);
@@ -121,52 +187,74 @@ public class FriendshipService {
 
 
 
+
     // 🔹 Eliminar amistad
     public void removeFriendship(Long userId, Long friendId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
-        User friend = userRepository.findById(friendId)
-                .orElseThrow(() -> new RuntimeException("Amigo no encontrado."));
 
-        // Buscar la relación de amistad en ambos sentidos
-        Optional<Friendship> friendshipOpt = friendshipRepository.findByUserAndFriend(user, friend);
+        User current = authService.getCurrentUser();
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+        User friend = userRepository.findById(friendId)
+                .orElseThrow(() -> new RuntimeException("Amigo no encontrado"));
+
+        // USER → solo eliminar sus amistades
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new RuntimeException("No puedes eliminar amistades de otros.");
+        }
+
+        // ADMIN → solo si ambos son del mismo ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(user.getAyuntamiento());
+            authService.ensureSameAyuntamiento(friend.getAyuntamiento());
+        }
+
+        // SUPERADMIN → sin restricciones
+
+        Optional<Friendship> friendshipOpt =
+                friendshipRepository.findByUserAndFriend(user, friend);
 
         if (friendshipOpt.isEmpty()) {
-            friendshipOpt = friendshipRepository.findByUserAndFriend(friend, user);
+            friendshipOpt =
+                    friendshipRepository.findByUserAndFriend(friend, user);
         }
 
         Friendship friendship = friendshipOpt
                 .orElseThrow(() -> new RuntimeException("No existe una amistad entre estos usuarios."));
 
-        // Solo se puede eliminar una amistad aceptada
         if (friendship.getStatus() != FriendshipStatus.ACCEPTED) {
-            throw new IllegalStateException("Solo puedes eliminar amistades aceptadas.");
+            throw new RuntimeException("Solo puedes eliminar amistades aceptadas.");
         }
 
         friendshipRepository.delete(friendship);
     }
 
 
+
     // 🔹 Obtener lista de amigos de un usuario
     public List<UserDTO> getFriendsOfUser(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
 
-        List<Friendship> friendships = friendshipRepository.findAcceptedFriendshipsByUserId(userId);
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        return friendships.stream()
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new RuntimeException("No puedes ver los amigos de otro usuario.");
+        }
+
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(target.getAyuntamiento());
+        }
+
+        return friendshipRepository.findAcceptedFriendshipsByUserId(userId)
+                .stream()
                 .map(f -> {
-                    User friend = f.getUser().equals(user) ? f.getFriend() : f.getUser();
-                    UserDTO dto = new UserDTO();
-                    dto.setId(friend.getId());
-                    dto.setUsername(friend.getUsername());
-                    dto.setFullName(friend.getFullName());
-                    dto.setEmail(friend.getEmail());
-                    dto.setCreatedAt(friend.getCreatedAt());
-                    return dto;
+                    User friend = f.getUser().equals(target) ? f.getFriend() : f.getUser();
+                    return toDTO(friend);
                 })
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
 
     //Lista de solicitudes recibidas
@@ -189,6 +277,21 @@ public class FriendshipService {
                     return dto;
                 })
                 .collect(Collectors.toList());
+    }
+
+
+    public long getPendingCount(Long userId) {
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes ver solicitudes de otro usuario.");
+        }
+
+        return friendshipRepository.countPendingByUserId(userId);
+    }
+
+    public boolean hasPending(Long userId) {
+        return getPendingCount(userId) > 0;
     }
 
 

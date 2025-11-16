@@ -33,6 +33,12 @@ public class LeagueInvitationController {
         return invitationService.getInvitationsForUser(userId);
     }
 
+    @GetMapping("/league/pending/count/{userId}")
+    public long getPendingCount(@PathVariable Long userId) {
+        return invitationService.getPendingCount(userId);
+    }
+
+
     @PostMapping("/{invitationId}/respond")
     public void respondToInvitation(@PathVariable Long invitationId,
                                     @RequestParam boolean accepted) {

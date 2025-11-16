@@ -29,5 +29,10 @@ public class Invitation {
     @Enumerated(EnumType.STRING)
     private InvitationStatus status; // PENDING, ACCEPTED, REJECTED
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
     private LocalDateTime createdAt = LocalDateTime.now();
 }

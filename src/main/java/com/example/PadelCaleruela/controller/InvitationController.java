@@ -27,6 +27,17 @@ public class InvitationController {
         return invitationService.getPendingInvitations(userId);
     }
 
+    @GetMapping("/pending/count/{userId}")
+    public long getPendingCount(@PathVariable Long userId) {
+        return invitationService.getPendingCount(userId);
+    }
+
+    @GetMapping("/pending/has/{userId}")
+    public boolean hasPending(@PathVariable Long userId) {
+        return invitationService.hasPending(userId);
+    }
+
+
     @PutMapping("/{invitationId}/respond")
     public ResponseEntity<String> respondInvitation(
             @PathVariable Long invitationId,

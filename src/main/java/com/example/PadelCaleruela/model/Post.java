@@ -25,6 +25,11 @@ public class Post {
     @JoinColumn(name="user_id")
     private User user;
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
     @PrePersist
     public void prePersist() {
         createdAt = LocalDateTime.now();

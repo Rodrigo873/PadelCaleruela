@@ -1,13 +1,20 @@
 package com.example.PadelCaleruela.service;
 
 
+import com.example.PadelCaleruela.AppProperties;
 import com.example.PadelCaleruela.dto.LeagueDTO;
 import com.example.PadelCaleruela.dto.LeaguePairDTO;
 import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.*;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -25,39 +32,101 @@ public class LeagueService {
     private final LeagueRankingRepository leagueRankingRepository;
     private final LeagueTeamRankingRepository leagueTeamRankingRepository;
 
-    public LeagueService(LeagueRepository leagueRepository, UserRepository userRepository,
-                         LeagueInvitationRepository leagueInvitationRepository,LeagueMatchRepository matchRepository,
-                         LeagueTeamRepository leagueTeamRepository,
-                         LeagueTeamRankingRepository leagueTeamRankingRepository,
-                         LeagueRankingRepository leagueRankingRepository) {
+    private final AuthService authService;
+
+    private final AppProperties appProperties;
+
+    private final FileStorageService fileStorageService;
+
+
+    public LeagueService(
+            LeagueRepository leagueRepository,
+            UserRepository userRepository,
+            LeagueInvitationRepository leagueInvitationRepository,
+            LeagueMatchRepository matchRepository,
+            LeagueTeamRepository leagueTeamRepository,
+            LeagueTeamRankingRepository leagueTeamRankingRepository,
+            LeagueRankingRepository leagueRankingRepository,
+            AuthService authService,
+            AppProperties appProperties,
+            FileStorageService fileStorageService
+    ) {
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
-        this.leagueMatchRepository=matchRepository;
-        this.leagueInvitationRepository=leagueInvitationRepository;
-        this.leagueTeamRepository=leagueTeamRepository;
-        this.leagueTeamRankingRepository=leagueTeamRankingRepository;
-        this.leagueRankingRepository=leagueRankingRepository;
-
+        this.leagueInvitationRepository = leagueInvitationRepository;
+        this.leagueMatchRepository = matchRepository;
+        this.leagueTeamRepository = leagueTeamRepository;
+        this.leagueTeamRankingRepository = leagueTeamRankingRepository;
+        this.leagueRankingRepository = leagueRankingRepository;
+        this.authService = authService;
+        this.appProperties = appProperties;
+        this.fileStorageService=fileStorageService;
     }
 
+
     @Transactional
-    public LeagueDTO createLeague(LeagueDTO dto) {
+    public LeagueDTO createLeague(LeagueDTO dto,MultipartFile image) throws IOException {
+
+        User creator = userRepository.findById(dto.getCreatorId())
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        User current = authService.getCurrentUser();
+
+        // USER → solo crear su propia liga
+        if (authService.isUser() && !current.getId().equals(dto.getCreatorId())) {
+            throw new AccessDeniedException("No puedes crear ligas para otro usuario.");
+        }
+
+        // ADMIN → solo si pertenece al mismo ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(creator);
+        }
+
+
         League league = new League();
         league.setName(dto.getName());
         league.setDescription(dto.getDescription());
         league.setIsPublic(dto.getIsPublic());
-        league.setImageUrl(dto.getImageUrl());
+        if (image != null && !image.isEmpty()) {
+            String imageUrl = saveProfileImage(image);
+            league.setImageUrl(imageUrl);
+        }
         league.setRegistrationDeadline(dto.getRegistrationDeadline());
         league.setStartDate(dto.getStartDate());
         league.setEndDate(dto.getEndDate());
         league.setStatus(LeagueStatus.PENDING);
 
-        User creator = userRepository.findById(dto.getCreatorId())
-                .orElseThrow(() -> new RuntimeException("Creator not found"));
         league.setCreator(creator);
+        league.setAyuntamiento(creator.getAyuntamiento());  // 🔥 MULTI-AYTO
 
         leagueRepository.save(league);
+
         return mapToDto(league);
+    }
+
+    private String saveProfileImage(MultipartFile file) throws IOException {
+
+        // Crear carpeta si no existe
+        Path uploadPath = Paths.get("uploads/profile-images");
+        if (!Files.exists(uploadPath)) {
+            Files.createDirectories(uploadPath);
+        }
+
+        // Sanear nombre
+        String originalFileName = file.getOriginalFilename();
+        String sanitizedFileName = originalFileName != null
+                ? originalFileName.replaceAll("\\s+", "_")
+                : "unknown";
+
+        // Nombre único
+        String filename = UUID.randomUUID() + "_" + sanitizedFileName;
+        Path filePath = uploadPath.resolve(filename);
+
+        // Guardar archivo físico
+        Files.write(filePath, file.getBytes());
+
+        // URL pública completa
+        return appProperties.getBaseUrl() + "/uploads/profile-images/" + filename;
     }
 
     /**
@@ -65,74 +134,95 @@ public class LeagueService {
      */
     @Transactional(readOnly = true)
     public List<LeagueDTO> getLeaguesByPlayer(Long playerId) {
-        List<League> leagues = leagueRepository.findAll();
 
-        return leagues.stream()
-                .filter(l -> {
-                    // ❌ Excluir las ligas finalizadas
-                    if (l.getStatus() == LeagueStatus.FINISHED) {
-                        return false;
-                    }
+        User current = authService.getCurrentUser();
+        User player = userRepository.findById(playerId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-                    // ✅ Ligas creadas por el usuario
-                    boolean isCreator = l.getCreator() != null && l.getCreator().getId().equals(playerId);
+        // USER → solo ver sus propias ligas
+        if (authService.isUser() && !current.getId().equals(playerId)) {
+            throw new AccessDeniedException("No puedes ver las ligas de otro usuario.");
+        }
 
-                    // ✅ Ligas en las que participa como jugador
-                    Set<User> players = l.getPlayers();
-                    boolean isPlayer = players != null &&
-                            players.stream().anyMatch(p -> p.getId().equals(playerId));
+        // ADMIN → solo si es mismo ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(player);
+        }
 
-                    // ✅ Incluir si es creador o jugador
-                    return isCreator || isPlayer;
-                })
+        return leagueRepository.findAll().stream()
+                .filter(l -> Objects.equals(l.getAyuntamiento().getId(), player.getAyuntamiento().getId())
+                        || authService.isSuperAdmin())
+                .filter(l -> l.getStatus() != LeagueStatus.FINISHED)
+                .filter(l -> l.getCreator().getId().equals(playerId) ||
+                        l.getPlayers().stream().anyMatch(p -> p.getId().equals(playerId)))
                 .map(this::mapToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
 
     @Transactional(readOnly = true)
     public List<LeagueDTO> getFinishedLeaguesByPlayer(Long playerId) {
-        List<League> leagues = leagueRepository.findAll();
 
-        return leagues.stream()
-                .filter(l -> {
-                    // ✅ Ligas finalizadas
-                    boolean isFinished = l.getStatus() == LeagueStatus.FINISHED;
+        User current = authService.getCurrentUser();
+        User player = userRepository.findById(playerId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-                    // ✅ Ligas creadas por el usuario
-                    boolean isCreator = l.getCreator() != null && l.getCreator().getId().equals(playerId);
+        if (authService.isUser() && !current.getId().equals(playerId)) {
+            throw new AccessDeniedException("No puedes ver las ligas de otro usuario.");
+        }
 
-                    // ✅ Ligas donde el usuario participó
-                    Set<User> players = l.getPlayers();
-                    boolean isPlayer = players != null &&
-                            players.stream().anyMatch(p -> p.getId().equals(playerId));
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(player);
+        }
 
-                    // ✅ Devuelve solo si la liga está finalizada y el usuario participó o la creó
-                    return isFinished && (isCreator || isPlayer);
-                })
+        return leagueRepository.findAll().stream()
+                .filter(l -> l.getStatus() == LeagueStatus.FINISHED)
+                .filter(l -> authService.isSuperAdmin()
+                        || Objects.equals(l.getAyuntamiento().getId(), player.getAyuntamiento().getId()))
+                .filter(l -> l.getCreator().getId().equals(playerId)
+                        || l.getPlayers().stream().anyMatch(p -> p.getId().equals(playerId)))
                 .map(this::mapToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
     /** 🔥 Retorna todas las ligas con estado "ACTIVE" */
     public List<LeagueDTO> getActiveLeagues() {
-        return leagueRepository.findAllActivePublicLeagues()
-                .stream()
+
+        User current = authService.getCurrentUser();
+
+        List<League> leagues;
+
+        if (authService.isSuperAdmin()) {
+            leagues = leagueRepository.findAllActivePublicLeagues();
+        } else {
+            leagues = leagueRepository.findAllActivePublicLeaguesByAyuntamiento(
+                    current.getAyuntamiento().getId()
+            );
+        }
+
+        return leagues.stream()
                 .map(this::mapToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
 
     // 🆕 Obtener jugadores agrupados por parejas
     @Transactional(readOnly = true)
     public List<LeaguePairDTO> getLeagueParticipantsGrouped(Long leagueId) {
+
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
 
-        // 🔹 1. Obtener todos los equipos con sus jugadores
+        // 🔐 Multi-ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        }
+
         List<LeagueTeam> teams = leagueTeamRepository.findByLeagueIdWithPlayers(leagueId);
 
-        // 🔹 2. Crear DTOs para las parejas (equipos)
         List<LeaguePairDTO> pairs = new ArrayList<>();
 
         for (LeagueTeam team : teams) {
@@ -141,14 +231,15 @@ public class LeagueService {
             List<Long> playerIds = players.stream().map(User::getId).toList();
             List<String> usernames = players.stream().map(User::getUsername).toList();
             List<String> images = players.stream()
-                    .map(u -> u.getProfileImageUrl() != null ? u.getProfileImageUrl()
+                    .map(u -> u.getProfileImageUrl() != null
+                            ? u.getProfileImageUrl()
                             : "https://ui-avatars.com/api/?name=" + u.getUsername())
                     .toList();
 
             pairs.add(new LeaguePairDTO(playerIds, usernames, images));
         }
 
-        // 🔹 3. Detectar jugadores sin pareja (inscritos pero no en ningún equipo)
+        // Jugadores sin pareja
         Set<Long> playersInTeams = teams.stream()
                 .flatMap(t -> t.getPlayers().stream().map(User::getId))
                 .collect(Collectors.toSet());
@@ -157,7 +248,6 @@ public class LeagueService {
                 .filter(p -> !playersInTeams.contains(p.getId()))
                 .toList();
 
-        // 🔹 4. Agregar los que están sin pareja
         for (User p : unpairedPlayers) {
             pairs.add(new LeaguePairDTO(
                     List.of(p.getId()),
@@ -174,46 +264,111 @@ public class LeagueService {
 
 
     public List<LeagueDTO> getAllPublicLeagues() {
-        return leagueRepository.findAllPublicPendingLeagues()
-                .stream()
+
+        User current = authService.getCurrentUser();
+
+        List<League> leagues;
+
+        if (authService.isSuperAdmin()) {
+            leagues = leagueRepository.findAllPublicPendingLeagues();
+        } else {
+            leagues = leagueRepository.findAllPublicPendingLeaguesByAyuntamiento(
+                    current.getAyuntamiento().getId()
+            );
+        }
+
+        return leagues.stream()
                 .map(this::mapToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
+
 
     @Transactional(readOnly = true)
     public boolean isUserInLeague(Long leagueId, Long userId) {
-        return leagueRepository.findById(leagueId)
-                .map(league -> league.getPlayers()
-                        .stream()
-                        .anyMatch(user -> user.getId().equals(userId)))
-                .orElse(false);
+
+        User current = authService.getCurrentUser();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // USER → solo preguntarse a sí mismo
+        if (authService.isUser() && !current.getId().equals(userId)) {
+            throw new AccessDeniedException("No puedes comprobar ligas de otro usuario.");
+        }
+
+        League league = leagueRepository.findById(leagueId)
+                .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
+
+        // ADMIN → mismo ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            authService.ensureSameAyuntamiento(target);
+        }
+
+        return league.getPlayers().stream()
+                .anyMatch(u -> u.getId().equals(userId));
     }
+
 
 
     public LeagueDTO getLeague(Long id) {
-        return leagueRepository.findById(id)
-                .map(this::mapToDto)
+
+        League league = leagueRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("League not found"));
+
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
+            boolean isCreator = league.getCreator() != null &&
+                    league.getCreator().getId().equals(current.getId());
+
+            boolean isPlayer = league.getPlayers().stream()
+                    .anyMatch(p -> p.getId().equals(current.getId()));
+
+            // Si no es pública y no participa → fuera
+            if (!Boolean.TRUE.equals(league.getIsPublic()) &&
+                    !isCreator &&
+                    !isPlayer &&
+                    !authService.isAdmin()) {
+                throw new AccessDeniedException("No puedes acceder a esta liga privada.");
+            }
+        }
+
+        return mapToDto(league);
     }
+
 
     @Transactional
     public void addPlayerToLeague(Long leagueId, Long playerId) {
+
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
         User player = userRepository.findById(playerId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // 🔹 Buscar si hay una invitación pendiente
-        Optional<LeagueInvitation> existingInvitationOpt =
-                leagueInvitationRepository.findByLeague_IdAndReceiver_IdAndStatus(leagueId, playerId, InvitationStatus.PENDING);
+        User current = authService.getCurrentUser();
 
-        if (existingInvitationOpt.isPresent()) {
-            LeagueInvitation invitation = existingInvitationOpt.get();
-            invitation.setStatus(InvitationStatus.ACCEPTED);
-            leagueInvitationRepository.save(invitation);
+        // Multi-ayuntamiento
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            authService.ensureSameAyuntamiento(player);
         }
 
-        // 🔹 Evitar duplicados (por si ya está en la liga)
+
+        // Optional: bloquear si la liga está cerrada
+        if (league.getStatus() == LeagueStatus.FINISHED) {
+            throw new RuntimeException("La liga ya está finalizada.");
+        }
+
+        // Invitación pendiente → marcar como ACCEPTED
+        leagueInvitationRepository.findByLeague_IdAndReceiver_IdAndStatus(
+                        leagueId, playerId, InvitationStatus.PENDING)
+                .ifPresent(inv -> {
+                    inv.setStatus(InvitationStatus.ACCEPTED);
+                    leagueInvitationRepository.save(inv);
+                });
+
         boolean alreadyInLeague = league.getPlayers().stream()
                 .anyMatch(p -> p.getId().equals(playerId));
 
@@ -223,15 +378,51 @@ public class LeagueService {
         }
     }
 
+    private String saveLeagueImage(MultipartFile file) throws IOException {
+
+        Path uploadPath = Paths.get("uploads/league-profile");
+        if (!Files.exists(uploadPath)) {
+            Files.createDirectories(uploadPath);
+        }
+
+        String originalFileName = file.getOriginalFilename();
+        String sanitizedFileName = originalFileName != null
+                ? originalFileName.replaceAll("\\s+", "_")
+                : "unknown";
+
+        String filename = UUID.randomUUID() + "_" + sanitizedFileName;
+
+        Path filePath = uploadPath.resolve(filename);
+        Files.write(filePath, file.getBytes());
+
+        return appProperties.getBaseUrl() + "/uploads/league-profile/" + filename;
+    }
+
+
 
     @Transactional
     public void removePlayerFromLeague(Long leagueId, Long playerId) {
+
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
         User player = userRepository.findById(playerId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
+
+        User current = authService.getCurrentUser();
+
+        if (!authService.isSuperAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            authService.ensureSameAyuntamiento(player);
+        }
+
+        // USER → solo puede borrarse a sí mismo
+        if (authService.isUser() && !current.getId().equals(playerId)) {
+            throw new AccessDeniedException("No puedes eliminar a otro jugador de la liga.");
+        }
+
         league.removePlayer(player);
     }
+
 
     @Transactional
     public boolean deleteLeague(Long leagueId, Long userId) {
@@ -265,7 +456,13 @@ public class LeagueService {
         dto.setName(league.getName());
         dto.setDescription(league.getDescription());
         dto.setIsPublic(league.getIsPublic());
-        dto.setImageUrl(league.getImageUrl());
+        String img = league.getImageUrl();
+        if (img != null && !img.isBlank()) {
+            if (!img.startsWith("http")) {
+                img = appProperties.getBaseUrl() + img;
+            }
+        }
+        dto.setImageUrl(img);
         dto.setRegistrationDeadline(league.getRegistrationDeadline());
         dto.setStartDate(league.getStartDate());
         dto.setEndDate(league.getEndDate());

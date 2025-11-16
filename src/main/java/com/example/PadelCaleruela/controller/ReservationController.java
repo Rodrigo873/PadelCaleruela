@@ -102,6 +102,11 @@ public class ReservationController {
         ));
     }
 
+    @GetMapping("/confirmed/count/{userId}")
+    public ResponseEntity<Integer> getConfirmedReservationCount(@PathVariable Long userId) {
+        int count = reservationService.getConfirmedReservationsCount(userId);
+        return ResponseEntity.ok(count);
+    }
 
 
 

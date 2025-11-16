@@ -71,6 +71,11 @@ public class League {
     @OneToMany(mappedBy = "league", cascade = CascadeType.ALL, orphanRemoval = true)
     private Set<LeagueInvitation> invitations = new HashSet<>();
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
 
 
     // --- Métodos auxiliares ---

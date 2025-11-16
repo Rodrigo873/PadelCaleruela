@@ -3,10 +3,14 @@ package com.example.PadelCaleruela.controller;
 import com.example.PadelCaleruela.dto.LeagueDTO;
 import com.example.PadelCaleruela.dto.LeaguePairDTO;
 import com.example.PadelCaleruela.service.LeagueService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 @RestController
@@ -20,10 +24,15 @@ public class LeagueController {
         this.leagueService = leagueService;
     }
 
-    @PostMapping
-    public LeagueDTO createLeague(@RequestBody LeagueDTO dto) {
-        return leagueService.createLeague(dto);
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public LeagueDTO createLeague(
+            @RequestPart("league") LeagueDTO dto,
+            @RequestPart(value = "image", required = false) MultipartFile image
+    ) throws IOException {
+        return leagueService.createLeague(dto, image);
     }
+
+
 
     @GetMapping("/public")
     public List<LeagueDTO> getPublicLeagues() {

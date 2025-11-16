@@ -54,6 +54,17 @@ public class FriendshipController {
         return ResponseEntity.ok(friendshipService.getPendingRequests(userId));
     }
 
+    @GetMapping("/pending/count/{userId}")
+    public long getPendingCount(@PathVariable Long userId) {
+        return friendshipService.getPendingCount(userId);
+    }
+
+    @GetMapping("/pending/has/{userId}")
+    public boolean hasPending(@PathVariable Long userId) {
+        return friendshipService.hasPending(userId);
+    }
+
+
     // Listar amigos de un usuario
     @GetMapping("/user/{userId}")
     public List<UserDTO> getFriends(@PathVariable Long userId) {
@@ -72,16 +83,16 @@ public class FriendshipController {
      * 🔹 Obtener la lista de seguidores de un usuario
      */
     @GetMapping("/followers/{userId}")
-    public List<UserDTO> getFollowers(@PathVariable Long userId) {
-        return friendshipService.getFollowers(userId);
+    public int getFollowers(@PathVariable Long userId) {
+        return friendshipService.getFollowersCount(userId);
     }
 
     /**
      * 🔹 Obtener la lista de usuarios a los que sigue un usuario
      */
     @GetMapping("/following/{userId}")
-    public List<UserDTO> getFollowing(@PathVariable Long userId) {
-        return friendshipService.getFollowing(userId);
+    public int getFollowing(@PathVariable Long userId) {
+        return friendshipService.getFollowingCount(userId);
     }
 
     /** 🔹 Eliminar amistad / dejar de seguir */

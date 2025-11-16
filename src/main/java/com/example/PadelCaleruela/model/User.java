@@ -75,6 +75,11 @@ public class User {
     @Column
     private String defaultPaymentMethodId; // opcional: favorito del usuario
 
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

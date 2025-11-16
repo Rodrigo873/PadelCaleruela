@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
@@ -45,6 +46,8 @@ public class Reservation {
     private LocalDateTime endTime;
     private LocalDateTime createdAt;
 
+    private BigDecimal precio;
+
     @OneToOne(mappedBy = "reservation", cascade = CascadeType.ALL)
     @ToString.Exclude
     private Payment payment;
@@ -58,6 +61,12 @@ public class Reservation {
 
     @Column(nullable = false)
     private boolean isPublic = false;
+
+    @ManyToOne
+    @JoinColumn(name = "ayuntamiento_id")
+    private Ayuntamiento ayuntamiento;
+
+
 
     @PrePersist
     public void prePersist() {
