@@ -16,4 +16,5 @@ public class LeagueInvitationDTO {
     private LeagueInvitationType type;
     private String status;
     private LocalDateTime sentAt;
+    private String senderProfileImageUrl;
 }

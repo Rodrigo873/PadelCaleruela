@@ -319,7 +319,8 @@ public class LeagueMatchService {
                                     p.getId(),
                                     p.getUsername(),
                                     p.getProfileImageUrl(),
-                                    false
+                                    false,
+                                    p.getStatus()
                             ))
                             .toList()
             );
@@ -332,7 +333,8 @@ public class LeagueMatchService {
                                     p.getId(),
                                     p.getUsername(),
                                     p.getProfileImageUrl(),
-                                    false
+                                    false,
+                                    p.getStatus()
                             ))
                             .toList()
             );

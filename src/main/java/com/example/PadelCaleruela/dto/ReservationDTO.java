@@ -21,6 +21,7 @@ public class ReservationDTO {
     @JsonProperty("isPublic")
     private boolean isPublic;
     private BigDecimal precio;
+    private Long pistaId;
 
 
 

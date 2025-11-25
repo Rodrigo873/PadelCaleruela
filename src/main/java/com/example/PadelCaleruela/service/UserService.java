@@ -6,10 +6,7 @@ import com.example.PadelCaleruela.dto.InfoUserDTO;
 import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
 import com.example.PadelCaleruela.model.*;
-import com.example.PadelCaleruela.repository.FriendshipRepository;
-import com.example.PadelCaleruela.repository.LeagueRepository;
-import com.example.PadelCaleruela.repository.ReservationRepository;
-import com.example.PadelCaleruela.repository.UserRepository;
+import com.example.PadelCaleruela.repository.*;
 import jakarta.transaction.Transactional;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -41,6 +38,11 @@ public class UserService {
 
     private final AppProperties appProperties;
 
+    private final FollowRepository followRepository;
+
+    private final AyuntamientoRepository ayuntamientoRepository;
+
+
     private static final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/profile-images/";
 
 
@@ -52,7 +54,9 @@ public class UserService {
             EmailService emailService,
             LeagueRepository leagueRepository,
             AuthService authService,
-            AppProperties appProperties
+            AppProperties appProperties,
+            FollowRepository followRepository,
+            AyuntamientoRepository ayuntamientoRepository
     ) {
         this.userRepository = repo;
         this.passwordEncoder = passwordEncoder;
@@ -62,6 +66,8 @@ public class UserService {
         this.leagueRepository = leagueRepository;
         this.authService = authService;
         this.appProperties = appProperties;
+        this.followRepository=followRepository;
+        this.ayuntamientoRepository=ayuntamientoRepository;
     }
 
 
@@ -69,16 +75,21 @@ public class UserService {
 
         User current = authService.getCurrentUser();
 
+        // SUPERADMIN → ver todo
         if (authService.isSuperAdmin()) {
-            // SUPERADMIN → devuelve todos
             return userRepository.findAll()
                     .stream()
                     .map(this::toDTO)
                     .toList();
         }
 
+        // ADMIN → ver solo su ayuntamiento
         if (authService.isAdmin()) {
-            // ADMIN → solo usuarios de su ayuntamiento
+
+            if (current.getAyuntamiento() == null) {
+                throw new IllegalStateException("El administrador no tiene ayuntamiento asignado.");
+            }
+
             Long ayuntamientoId = current.getAyuntamiento().getId();
 
             return userRepository.findByAyuntamientoId(ayuntamientoId)
@@ -92,10 +103,12 @@ public class UserService {
     }
 
 
+
     public List<InfoUserDTO> getAllInfoUsers() {
 
         User current = authService.getCurrentUser();
 
+        // SUPERADMIN → ver todos
         if (authService.isSuperAdmin()) {
             return userRepository.findAll()
                     .stream()
@@ -103,28 +116,37 @@ public class UserService {
                     .toList();
         }
 
+        // ADMIN → solo los de su ayuntamiento
         if (authService.isAdmin()) {
+
+            if (current.getAyuntamiento() == null) {
+                throw new IllegalStateException("El administrador no tiene ayuntamiento asignado.");
+            }
+
             Long ayId = current.getAyuntamiento().getId();
+
             return userRepository.findByAyuntamientoId(ayId)
                     .stream()
                     .map(this::toDTOinfo)
                     .toList();
         }
 
+        // USER → prohibido
         throw new AccessDeniedException("No tienes permiso para ver esta información.");
     }
+
 
 
     @Transactional
     public User updateUserRole(Long userId, String newRole) {
 
-        if (!authService.isSuperAdmin()) {
-            throw new AccessDeniedException("Solo el SUPERADMIN puede cambiar roles.");
-        }
+        User current = authService.getCurrentUser();
 
-        User user = userRepository.findById(userId)
+        // Validar existente
+        User target = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
+        // Validar rol destino
         if (!newRole.equalsIgnoreCase("USER") &&
                 !newRole.equalsIgnoreCase("ADMIN") &&
                 !newRole.equalsIgnoreCase("SUPERADMIN")) {
@@ -132,79 +154,170 @@ public class UserService {
             throw new IllegalArgumentException("Rol no válido.");
         }
 
-        user.setRole(Role.valueOf(newRole.toUpperCase()));
-        return userRepository.save(user);
+        Role targetRole = Role.valueOf(newRole.toUpperCase());
+
+        // ============================
+        // SUPERADMIN → puede todo
+        // ============================
+        if (authService.isSuperAdmin()) {
+            target.setRole(targetRole);
+            return userRepository.save(target);
+        }
+
+        // ============================
+        // ADMIN → restricciones
+        // ============================
+
+        if (authService.isAdmin()) {
+
+            // 1) No tiene ayuntamiento? No debería pasar.
+            if (current.getAyuntamiento() == null) {
+                throw new IllegalStateException("Tu cuenta no tiene ayuntamiento asignado.");
+            }
+
+            Long adminAyto = current.getAyuntamiento().getId();
+
+            // 2) Solo puede modificar usuarios de su ayuntamiento
+            if (target.getAyuntamiento() == null ||
+                    !target.getAyuntamiento().getId().equals(adminAyto)) {
+                throw new AccessDeniedException("No puedes modificar usuarios de otro ayuntamiento.");
+            }
+
+            // 3) Un ADMIN no puede ascender a SUPERADMIN
+            if (targetRole == Role.SUPERADMIN) {
+                throw new AccessDeniedException("No puedes asignar rol SUPERADMIN.");
+            }
+
+            // 4) Un ADMIN no puede modificar a un SUPERADMIN
+            if (target.getRole() == Role.SUPERADMIN) {
+                throw new AccessDeniedException("No puedes modificar a un SUPERADMIN.");
+            }
+
+            // 5) Un ADMIN puede modificar a USER y ADMIN dentro de su ayuntamiento
+            target.setRole(targetRole);
+            return userRepository.save(target);
+        }
+
+        // ============================
+        // USER → prohibido
+        // ============================
+        throw new AccessDeniedException("No tienes permisos para cambiar roles.");
     }
+
 
 
     public UserDTO saveUser(User user) {
 
         User current = authService.getCurrentUser();
 
-        // ADMIN solo puede crear usuarios en su ayuntamiento
-        if (authService.isAdmin()) {
-            if (!Objects.equals(user.getAyuntamiento().getId(),
-                    current.getAyuntamiento().getId())) {
+        // ===============================
+        // 🚫 NADIE puede crear SUPERADMIN
+        // ===============================
+        if (user.getRole() == Role.SUPERADMIN) {
+            throw new AccessDeniedException("No está permitido crear usuarios con rol SUPERADMIN.");
+        }
 
-                throw new AccessDeniedException("Un administrador solo puede crear usuarios en su ayuntamiento.");
+        // ======================================================
+        // ADMIN → solo puede crear usuarios dentro de su ayto
+        // ======================================================
+        if (authService.isAdmin()) {
+
+            if (user.getAyuntamiento() == null ||
+                    current.getAyuntamiento() == null ||
+                    !Objects.equals(
+                            user.getAyuntamiento().getId(),
+                            current.getAyuntamiento().getId()
+                    )) {
+
+                throw new AccessDeniedException(
+                        "Un administrador solo puede crear usuarios en su ayuntamiento."
+                );
+            }
+
+            // 🚫 ADMIN NO puede crear administradores. Solo USER.
+            if (user.getRole() == Role.ADMIN) {
+                throw new AccessDeniedException(
+                        "Un administrador no puede crear otros administradores."
+                );
             }
         }
 
-        // USER no puede crear usuarios
+        // ======================================================
+        // USER → prohibido crear usuarios
+        // ======================================================
         if (authService.isUser()) {
             throw new AccessDeniedException("No tienes permisos para crear usuarios.");
         }
 
-        // 🔹 Comprobación de username único
+        // ===============================
+        // Validación de username y email
+        // ===============================
         if (userRepository.findByUsername(user.getUsername()).isPresent()) {
             throw new IllegalArgumentException("El nombre de usuario ya está en uso.");
         }
 
-        // 🔹 Comprobación opcional de email único
         if (userRepository.findByEmail(user.getEmail()).isPresent()) {
             throw new IllegalArgumentException("El correo electrónico ya está registrado.");
         }
-        String pass="";
-        if (user.getPassword().isEmpty()){
-            // 🔤 Conjunto de caracteres válidos
-            final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-            // 🔒 Generador seguro de números aleatorios
+        // ======================================================
+        // Generar o cifrar contraseña
+        // ======================================================
+        String pass = "";
+
+        if (user.getPassword().isEmpty()) {
+
+            final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
             SecureRandom random = new SecureRandom();
             StringBuilder sb = new StringBuilder(8);
 
-            // 📏 Generar la contraseña
             for (int i = 0; i < 8; i++) {
-                int index = random.nextInt(CHARS.length());
-                sb.append(CHARS.charAt(index));
+                sb.append(CHARS.charAt(random.nextInt(CHARS.length())));
             }
 
-            String generatedPassword = sb.toString();
-            pass=generatedPassword;
-            // 🔐 Cifrar antes de guardar
-            user.setPassword(passwordEncoder.encode(generatedPassword));
-        }else {
-            // 🔹 Encriptar la contraseña antes de guardar
+            pass = sb.toString();
+            user.setPassword(passwordEncoder.encode(pass));
+
+        } else {
             user.setPassword(passwordEncoder.encode(user.getPassword()));
         }
 
-        // 🔹 Guardar usuario
+        // ===============================
+        // Guardar usuario
+        // ===============================
         User saved = userRepository.save(user);
 
+        // ===============================
+        // Enviar email con contraseña
+        // ===============================
         emailService.sendHtmlEmail(
                 user.getEmail(),
                 "Usuario creado correctamente",
                 "<h3>¡Hola " + user.getUsername() + "!</h3>" +
-                        "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>"+
-                        "<p>Se te ha asignado una contraseña al azar, puedes cambiarla desde la app.</p>"+
-                        "<p>La contraseña es="+pass+"</p>"
-
-
+                        "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>" +
+                        "<p>Se te ha asignado una contraseña temporal, puedes cambiarla desde la app.</p>" +
+                        "<p><strong>Contraseña: " + pass + "</strong></p>"
         );
 
-        // 🔹 Retornar el DTO
         return toDTO(saved);
     }
+
+    // ⬇️ Dentro de UserService
+    public UserDTO updateUserAyuntamiento(Long userId, Long ayuntamientoId) {
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado."));
+
+        Ayuntamiento ayto = ayuntamientoRepository.findById(ayuntamientoId)
+                .orElseThrow(() -> new RuntimeException("Ayuntamiento no encontrado."));
+
+        user.setAyuntamiento(ayto);
+        userRepository.save(user);
+
+        return toDTO(user);
+    }
+
+
 
 
     public UserDTO getUserById(Long id) {
@@ -391,7 +504,9 @@ public class UserService {
         });
     }
 
-
+    public boolean isFollowing(Long followerId, Long targetId) {
+        return followRepository.existsByFollowerIdAndFollowedId(followerId, targetId);
+    }
 
     /**
      * 🔹 Obtiene los amigos de mis amigos (sugerencias)
@@ -544,7 +659,8 @@ public class UserService {
                         u.getId(),
                         u.getUsername(),
                         u.getProfileImageUrl(),
-                        false
+                        false,
+                        u.getStatus()
                 ))
                 .toList();
     }
@@ -633,7 +749,8 @@ public class UserService {
                         u.getId(),
                         u.getUsername(),
                         u.getProfileImageUrl(),
-                        false
+                        false,
+                        u.getStatus()
                 ))
                 .toList();
     }
@@ -702,7 +819,8 @@ public class UserService {
                 user.getId(),
                 user.getUsername(),
                 user.getProfileImageUrl(),
-                false
+                false,
+                user.getStatus()
         );
     }
 

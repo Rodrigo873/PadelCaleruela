@@ -9,9 +9,14 @@ import java.time.LocalDateTime;
 @Data
 public class PostDTO {
     private Long id;
+    private Long userId;
     private String message;
     private String matchResult;
     private Visibility visibility;
     private LocalDateTime createdAt;
-    private Long userId;
+    private String imageUrl;
+
+    // 🔥 Nuevos datos del usuario
+    private String username;
+    private String userImageUrl;
 }

@@ -66,6 +66,9 @@ public class Reservation {
     @JoinColumn(name = "ayuntamiento_id")
     private Ayuntamiento ayuntamiento;
 
+    @ManyToOne(optional = true)
+    @JoinColumn(name = "pista_id")
+    private Pista pista;
 
 
     @PrePersist

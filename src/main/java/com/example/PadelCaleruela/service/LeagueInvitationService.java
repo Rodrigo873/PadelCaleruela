@@ -5,6 +5,7 @@ import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.LeagueInvitationRepository;
 import com.example.PadelCaleruela.repository.LeagueRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
+import jakarta.transaction.Transactional;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -20,17 +21,27 @@ public class LeagueInvitationService {
     private final UserRepository userRepository;
     private final AuthService authService;
 
+    private final UserNotificationService userNotificationService;
+    private final NotificationAppService notificationAppService;
+    private final NotificationFactory notificationFactory;
+
 
     public LeagueInvitationService(
             LeagueInvitationRepository invitationRepository,
             LeagueRepository leagueRepository,
             UserRepository userRepository,
-            AuthService authService
+            AuthService authService,
+            UserNotificationService userNotificationService,
+            NotificationAppService notificationAppService,
+            NotificationFactory notificationFactory
     ) {
         this.invitationRepository = invitationRepository;
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+        this.userNotificationService=userNotificationService;
+        this.notificationAppService=notificationAppService;
+        this.notificationFactory=notificationFactory;
     }
 
     public LeagueInvitationDTO sendInvitation(Long leagueId, Long senderId, Long receiverId, LeagueInvitationType type) {
@@ -53,7 +64,6 @@ public class LeagueInvitationService {
             authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
         }
 
-
         // ADMIN → solo dentro de su ayuntamiento
         if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(league.getAyuntamiento());
@@ -64,6 +74,7 @@ public class LeagueInvitationService {
             throw new RuntimeException("Ya existe una invitación para este jugador.");
         }
 
+        // 🔹 Crear invitación
         LeagueInvitation invitation = new LeagueInvitation();
         invitation.setLeague(league);
         invitation.setSender(sender);
@@ -74,8 +85,21 @@ public class LeagueInvitationService {
 
         invitationRepository.save(invitation);
 
+        // 🔔 Enviar notificación push al jugador invitado
+        try {
+            userNotificationService.sendToUser(
+                    receiver.getId(),
+                    sender.getUsername(),
+                    NotificationType.LEAGUE_INVITATION
+            );
+        } catch (Exception e) {
+            System.err.println("❌ Error enviando notificación de liga a " +
+                    receiver.getUsername() + ": " + e.getMessage());
+        }
+
         return mapToDto(invitation);
     }
+
 
     public long getPendingCount(Long userId) {
         User current = authService.getCurrentUser();
@@ -112,7 +136,7 @@ public class LeagueInvitationService {
     }
 
 
-
+    @Transactional
     public void respondToInvitation(Long invitationId, boolean accepted) {
 
         User current = authService.getCurrentUser();
@@ -121,26 +145,28 @@ public class LeagueInvitationService {
                 .orElseThrow(() -> new RuntimeException("Invitación no encontrada"));
 
         User receiver = invitation.getReceiver();
+        User sender = invitation.getSender();
         League league = invitation.getLeague();
 
-        // USER → solo puede responder sus invitaciones
+        // USER → solo responder sus propias invitaciones
         if (authService.isUser() && !current.getId().equals(receiver.getId())) {
             throw new RuntimeException("No puedes responder invitaciones de otro usuario.");
         }
 
-        // ADMIN → solo si pertenece al mismo ayuntamiento
+        // ADMIN → mismo ayuntamiento
         if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(league.getAyuntamiento());
             authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
         }
 
-        // SUPERADMIN → no tiene restricciones
+        // SUPERADMIN → sin restricciones
 
         if (accepted) {
+
             invitation.setStatus(InvitationStatus.ACCEPTED);
 
-            // Evitar duplicados en la liga
-            boolean alreadyInLeague = league.getPlayers().stream()
+            boolean alreadyInLeague = league.getPlayers()
+                    .stream()
                     .anyMatch(u -> u.getId().equals(receiver.getId()));
 
             if (!alreadyInLeague) {
@@ -148,12 +174,96 @@ public class LeagueInvitationService {
                 leagueRepository.save(league);
             }
 
+            // ------------------------------------------
+            // 🔔 NOTIFICACIONES (PUSH + BD)
+            // ------------------------------------------
+            try {
+                // 1️⃣ Avisar al creador de la liga (se ha unido alguien nuevo)
+                sendAndSaveNotification(
+                        sender,              // destinatario
+                        receiver,            // quien acepta
+                        NotificationType.LEAGUE_INVITATION_ACCEPT,
+                        null                 // no hay reserva → pasamos null
+                );
+
+                // 2️⃣ Avisar a todos los jugadores de la liga excepto el que entra
+                for (User jugador : league.getPlayers()) {
+
+                    if (!jugador.getId().equals(receiver.getId())) {
+
+                        sendAndSaveNotification(
+                                jugador,              // destinatario
+                                receiver,             // quien se une
+                                NotificationType.LEAGUE_JOINED_WITH_YOU,
+                                null
+                        );
+                    }
+                }
+
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando notificaciones push/bd (aceptar liga): " + e.getMessage());
+            }
+
         } else {
+
             invitation.setStatus(InvitationStatus.REJECTED);
+
+            // ------------------------------------------
+            // 🔔 NOTIFICACIÓN RECHAZADA
+            // ------------------------------------------
+            try {
+                sendAndSaveNotification(
+                        sender,                 // creador
+                        receiver,               // quien rechaza
+                        NotificationType.LEAGUE_INVITATION_REJECT,
+                        null
+                );
+
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando notificación push/bd (rechazar liga): " + e.getMessage());
+            }
         }
 
         invitationRepository.save(invitation);
     }
+
+    private void sendAndSaveNotification(
+            User targetUser,
+            User fromUser,
+            NotificationType type,
+            Reservation reservation
+    ) {
+        String title = notificationFactory.getTitle(type);
+        String body = notificationFactory.getMessage(type,
+                fromUser != null ? fromUser.getUsername() : "Sistema");
+
+        String extraJson = null;
+
+        if (reservation != null) {
+            extraJson = """
+        {
+            "reservationId": %d
+        }
+        """.formatted(reservation.getId());
+        }
+
+        try {
+            userNotificationService.sendToUser(targetUser.getId(), fromUser.getUsername(), type);
+        } catch (Exception e) {
+            System.out.println("⚠ Error enviando push: " + e.getMessage());
+        }
+
+        Notification n = new Notification();
+        n.setUserId(targetUser.getId());
+        n.setSenderId(fromUser != null ? fromUser.getId() : null);
+        n.setType(type);
+        n.setTitle(title);
+        n.setMessage(body);
+        n.setExtraData(extraJson);
+
+        notificationAppService.saveNotification(n);
+    }
+
 
 
     private LeagueInvitationDTO mapToDto(LeagueInvitation inv) {
@@ -168,6 +278,9 @@ public class LeagueInvitationService {
         dto.setType(inv.getType());
         dto.setStatus(inv.getStatus().name());
         dto.setSentAt(inv.getSentAt());
+        dto.setSenderProfileImageUrl(
+                inv.getSender().getProfileImageUrl()   // o cualquier otra propiedad
+        );
         return dto;
     }
 }

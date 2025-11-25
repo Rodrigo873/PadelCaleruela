@@ -36,8 +36,7 @@ public class LeagueService {
 
     private final AppProperties appProperties;
 
-    private final FileStorageService fileStorageService;
-
+    private final UserNotificationService userNotificationService;
 
     public LeagueService(
             LeagueRepository leagueRepository,
@@ -49,7 +48,8 @@ public class LeagueService {
             LeagueRankingRepository leagueRankingRepository,
             AuthService authService,
             AppProperties appProperties,
-            FileStorageService fileStorageService
+            FileStorageService fileStorageService,
+            UserNotificationService userNotificationService
     ) {
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
@@ -60,7 +60,7 @@ public class LeagueService {
         this.leagueRankingRepository = leagueRankingRepository;
         this.authService = authService;
         this.appProperties = appProperties;
-        this.fileStorageService=fileStorageService;
+        this.userNotificationService=userNotificationService;
     }
 
 
@@ -144,20 +144,28 @@ public class LeagueService {
             throw new AccessDeniedException("No puedes ver las ligas de otro usuario.");
         }
 
-        // ADMIN → solo si es mismo ayuntamiento
+        // ADMIN → solo si pertenece al mismo ayuntamiento
         if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(player);
         }
 
         return leagueRepository.findAll().stream()
-                .filter(l -> Objects.equals(l.getAyuntamiento().getId(), player.getAyuntamiento().getId())
-                        || authService.isSuperAdmin())
-                .filter(l -> l.getStatus() != LeagueStatus.FINISHED)
-                .filter(l -> l.getCreator().getId().equals(playerId) ||
+                // 1️⃣ Filtrar siempre por ligas que creó el usuario
+                .filter(l -> l.getCreator().getId().equals(playerId)
+                        ||
+                        // o en las que participa
                         l.getPlayers().stream().anyMatch(p -> p.getId().equals(playerId)))
+                // 2️⃣ Filtrar por ayuntamiento pero permitiendo siempre al creador
+                .filter(l -> authService.isSuperAdmin()
+                        || l.getCreator().getId().equals(playerId)
+                        || Objects.equals(l.getAyuntamiento().getId(), player.getAyuntamiento().getId()))
+                // 3️⃣ No incluir ligas finalizadas salvo que el usuario sea el creador
+                .filter(l -> l.getCreator().getId().equals(playerId)
+                        || l.getStatus() != LeagueStatus.FINISHED)
                 .map(this::mapToDto)
                 .toList();
     }
+
 
 
 
@@ -426,29 +434,54 @@ public class LeagueService {
 
     @Transactional
     public boolean deleteLeague(Long leagueId, Long userId) {
+
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        // 1️⃣ Borrar dependencias directas antes de la liga
+        // Lista de jugadores ANTES de borrar nada
+        List<User> jugadores = new ArrayList<>(league.getPlayers());
+        User creator = league.getCreator();
+
+        // 1️⃣ Borrar dependencias
         leagueInvitationRepository.deleteAllByLeague(league);
         leagueMatchRepository.deleteAllByLeague(league);
         leagueTeamRankingRepository.deleteAllByLeague(league);
         leagueRankingRepository.deleteAllByLeague(league);
         leagueTeamRepository.deleteAllByLeague(league);
 
-        // 2️⃣ Borrar relaciones many-to-many (jugadores en liga)
+        // 2️⃣ Borrar relaciones many-to-many
         league.getPlayers().clear();
-        leagueRepository.save(league); // sincroniza el cambio
+        leagueRepository.save(league);
 
-        // ✅ Verificar que el usuario es el creador
-        if (league.getCreator() != null && league.getCreator().getId().equals(userId)) {
+        // 3️⃣ Verificar si quien la borra es el creador
+        if (creator != null && creator.getId().equals(userId)) {
+
             leagueRepository.delete(league);
+
+            // ⭐ 4️⃣ Enviar notificaciones a todos los jugadores
+            try {
+                for (User jugador : jugadores) {
+
+                    // No enviar notificación al propio creador
+                    if (jugador.getId().equals(creator.getId())) continue;
+
+                    userNotificationService.sendToUser(
+                            jugador.getId(),
+                            creator.getUsername(),                 // sender: el creador
+                            NotificationType.LEAGUE_DELETED
+                    );
+                }
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando notificaciones al borrar liga: " + e.getMessage());
+            }
+
             return true;
         }
 
-        // ❌ No es el creador
+        // ❌ No es el creador → denegado
         return false;
     }
+
 
     private LeagueDTO mapToDto(League league) {
         LeagueDTO dto = new LeagueDTO();

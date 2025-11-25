@@ -9,6 +9,9 @@ import java.math.BigDecimal;
 
 @Data
 public class TarifaFranjaDTO {
+
+    private long id;
+
     @Min(0)  @Max(23)
     private int horaInicio;
 

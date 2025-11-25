@@ -17,4 +17,5 @@ public class InvitationDTO {
     private Long reservationId;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
+    private String senderProfileImageUrl;
 }

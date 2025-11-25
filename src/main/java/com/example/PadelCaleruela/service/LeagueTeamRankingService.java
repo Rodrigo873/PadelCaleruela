@@ -171,7 +171,8 @@ public class LeagueTeamRankingService {
                                         p.getId(),
                                         p.getUsername(),
                                         p.getProfileImageUrl(),
-                                        false
+                                        false,
+                                        p.getStatus()
                                 ))
                                 .toList(),
                         r.getMatchesPlayed(),

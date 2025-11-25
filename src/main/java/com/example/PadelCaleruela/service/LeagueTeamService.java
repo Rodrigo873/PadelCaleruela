@@ -142,7 +142,8 @@ public class LeagueTeamService {
                                 p.getId(),
                                 p.getUsername(),
                                 p.getProfileImageUrl(),
-                                false
+                                false,
+                                p.getStatus()
                         ))
                         .toList()
         );
@@ -298,7 +299,7 @@ public class LeagueTeamService {
         dto.setLeagueName(team.getLeague().getName());
         dto.setPlayers(
                 team.getPlayers().stream()
-                        .map(p -> new PlayerInfoDTO(p.getId(), p.getUsername(), p.getProfileImageUrl(), false))
+                        .map(p -> new PlayerInfoDTO(p.getId(), p.getUsername(), p.getProfileImageUrl(), false,p.getStatus()))
                         .toList()
         );
 

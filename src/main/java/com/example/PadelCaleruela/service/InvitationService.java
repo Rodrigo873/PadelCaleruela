@@ -19,17 +19,25 @@ public class InvitationService {
     private final InvitationRepository invitationRepository;
     private final ReservationRepository reservationRepository;
     private final UserRepository userRepository;
-
     private final AuthService authService;
+    private final UserNotificationService userNotificationService;
+    private final NotificationFactory notificationFactory;
+    private final NotificationAppService notificationAppService;
+
 
     public InvitationService(InvitationRepository invitationRepository,
                              ReservationRepository reservationRepository,
                              UserRepository userRepository,
-                             AuthService authService) {
+                             AuthService authService,UserNotificationService userNotificationService,
+                             NotificationAppService notificationAppService,
+                             NotificationFactory notificationFactory) {
         this.invitationRepository = invitationRepository;
         this.reservationRepository = reservationRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+        this.userNotificationService=userNotificationService;
+        this.notificationAppService=notificationAppService;
+        this.notificationFactory=notificationFactory;
     }
 
 
@@ -43,19 +51,20 @@ public class InvitationService {
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + principalName));
 
         Reservation reservation = invitation.getReservation();
+        User creator = reservation.getUser();
 
-        // 🔐 Validación multi-ayuntamiento
+        // 🔐 Multi-ayuntamiento
         if (!authService.isSuperAdmin()) {
             authService.ensureSameAyuntamiento(reservation.getAyuntamiento());
             authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
         }
 
-        // USER → solo puede responder sus invitaciones
+        // USER → solo responder sus propias invitaciones
         if (authService.isUser() && !invitation.getReceiver().getId().equals(receiver.getId())) {
             throw new RuntimeException("No puedes responder invitaciones de otros usuarios.");
         }
 
-        // ADMIN → puede gestionar solo invitados de su ayuntamiento
+        // ADMIN → solo en su ayuntamiento
         if (authService.isAdmin() &&
                 !invitation.getReceiver().getAyuntamiento().getId()
                         .equals(authService.getCurrentUser().getAyuntamiento().getId())) {
@@ -63,21 +72,18 @@ public class InvitationService {
             throw new RuntimeException("No puedes gestionar invitaciones de otro ayuntamiento.");
         }
 
-        if (!invitation.getReceiver().getId().equals(receiver.getId()) &&
-                !authService.isAdmin() &&
-                !authService.isSuperAdmin()) {
-            throw new RuntimeException("No tienes permiso para responder esta invitación.");
-        }
+        boolean yaPresente = reservation.getJugadores().stream()
+                .anyMatch(u -> u.getId().equals(receiver.getId()));
 
-        // 🔎 Obtener todas las invitaciones previas
+        // Todas las invitaciones a esta reserva para este usuario
         List<Invitation> allForUser = invitationRepository
                 .findAllByReservationIdAndReceiverIdOrderByCreatedAtAsc(
                         reservation.getId(), receiver.getId());
 
-        boolean yaPresente = reservation.getJugadores().stream()
-                .anyMatch(u -> u.getId().equals(receiver.getId()));
 
-        // ACEPTAR ✔️
+        // --------------------------------------------------------------------------
+        // ✔ ACEPTAR INVITACIÓN
+        // --------------------------------------------------------------------------
         if (response.equalsIgnoreCase("accept")) {
 
             if (!yaPresente && reservation.getJugadores().size() >= 4)
@@ -86,7 +92,7 @@ public class InvitationService {
             invitation.setStatus(InvitationStatus.ACCEPTED);
             invitation.setCreatedAt(LocalDateTime.now());
 
-            // Cancelar el resto
+            // Rechazar duplicadas
             for (Invitation inv : allForUser) {
                 if (!inv.getId().equals(invitation.getId())) {
                     inv.setStatus(InvitationStatus.REJECTED);
@@ -98,10 +104,42 @@ public class InvitationService {
             reservationRepository.save(reservation);
             invitationRepository.saveAll(allForUser);
 
+            // ----------------------------------------------------------------------
+            // 🔔 NOTIFICACIONES PUSH + BASE DE DATOS
+            // ----------------------------------------------------------------------
+            try {
+
+                // 1️⃣ Al creador
+                sendAndSaveNotification(
+                        creator,
+                        receiver,
+                        NotificationType.MATCH_INVITATION_ACCEPTED,
+                        reservation
+                );
+
+                // 2️⃣ A los jugadores ya dentro (menos el que entra)
+                for (User jugador : reservation.getJugadores()) {
+                    if (!jugador.getId().equals(receiver.getId())) {
+                        sendAndSaveNotification(
+                                jugador,
+                                receiver,
+                                NotificationType.MATCH_JOINED_WITH_YOU,
+                                reservation
+                        );
+                    }
+                }
+
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando notificaciones (aceptar invitación): " + e.getMessage());
+            }
+
             return "✅ Invitación aceptada.";
         }
 
-        // RECHAZAR ❌
+
+        // --------------------------------------------------------------------------
+        // ❌ RECHAZAR INVITACIÓN
+        // --------------------------------------------------------------------------
         if (response.equalsIgnoreCase("reject")) {
 
             invitation.setStatus(InvitationStatus.REJECTED);
@@ -113,11 +151,26 @@ public class InvitationService {
             reservationRepository.save(reservation);
             invitationRepository.save(invitation);
 
+            // ----------------------------------------------------------------------
+            // 🔔 NOTIFICACIÓN DE RECHAZO (PUSH + BD)
+            // ----------------------------------------------------------------------
+            try {
+                sendAndSaveNotification(
+                        creator,
+                        receiver,
+                        NotificationType.MATCH_INVITATION_REJECTED,
+                        reservation
+                );
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando notificación (rechazo invitación): " + e.getMessage());
+            }
+
             return "❌ Invitación rechazada.";
         }
 
         throw new RuntimeException("Respuesta inválida. Usa 'accept' o 'reject'.");
     }
+
 
 
 
@@ -159,7 +212,6 @@ public class InvitationService {
             authService.ensureSameAyuntamiento(joiningUser.getAyuntamiento());
         }
 
-        // Validaciones estándar...
         if (!reservation.isPublic()) throw new RuntimeException("No es pública.");
         if (reservation.getStartTime().isBefore(LocalDateTime.now()))
             throw new RuntimeException("Ya comenzó.");
@@ -205,7 +257,79 @@ public class InvitationService {
         reservation.getJugadores().add(joiningUser);
         reservationRepository.save(reservation);
 
+
+        // -----------------------------------------------------------------
+        // 🔔 NOTIFICACIONES (PUSH + BD) — COMPLETAMENTE IMPLEMENTADAS
+        // -----------------------------------------------------------------
+        try {
+
+            User creator = reservation.getUser();
+
+            // 1️⃣ Al creador de la reserva (alguien se une)
+            sendAndSaveNotification(
+                    creator,
+                    joiningUser,
+                    NotificationType.PUBLIC_MATCH_JOINED,
+                    reservation
+            );
+
+            // 2️⃣ A los jugadores que ya estaban dentro (salvo el que entra)
+            for (User jugador : reservation.getJugadores()) {
+                if (!jugador.getId().equals(joiningUser.getId())) {
+
+                    sendAndSaveNotification(
+                            jugador,
+                            joiningUser,
+                            NotificationType.MATCH_JOINED_WITH_YOU,
+                            reservation
+                    );
+                }
+            }
+
+        } catch (Exception e) {
+            System.out.println("⚠ Error enviando notificaciones (joinPublicReservation): " + e.getMessage());
+        }
+
+
         return "✅ Te has unido correctamente.";
+    }
+
+
+    private void sendAndSaveNotification(
+            User targetUser,
+            User fromUser,
+            NotificationType type,
+            Reservation reservation
+    ) {
+        String title = notificationFactory.getTitle(type);
+        String body = notificationFactory.getMessage(type,
+                fromUser != null ? fromUser.getUsername() : "Sistema");
+
+        String extraJson = null;
+
+        if (reservation != null) {
+            extraJson = """
+        {
+            "reservationId": %d
+        }
+        """.formatted(reservation.getId());
+        }
+
+        try {
+            userNotificationService.sendToUser(targetUser.getId(), fromUser.getUsername(), type);
+        } catch (Exception e) {
+            System.out.println("⚠ Error enviando push: " + e.getMessage());
+        }
+
+        Notification n = new Notification();
+        n.setUserId(targetUser.getId());
+        n.setSenderId(fromUser != null ? fromUser.getId() : null);
+        n.setType(type);
+        n.setTitle(title);
+        n.setMessage(body);
+        n.setExtraData(extraJson);
+
+        notificationAppService.saveNotification(n);
     }
 
 
@@ -237,6 +361,7 @@ public class InvitationService {
             dto.setReceiverUsername(inv.getReceiver().getUsername());
             dto.setCreatedAt(inv.getCreatedAt());
             dto.setStatus(inv.getStatus());
+            dto.setSenderProfileImageUrl(inv.getSender().getProfileImageUrl());
 
             if (inv.getReservation() != null) {
                 dto.setReservationId(inv.getReservation().getId());

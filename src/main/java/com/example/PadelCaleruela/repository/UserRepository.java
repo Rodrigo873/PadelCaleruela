@@ -1,5 +1,6 @@
 package com.example.PadelCaleruela.repository;
 
+import com.example.PadelCaleruela.model.Role;
 import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.model.UserStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -13,6 +14,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
     Optional<User> findByEmail(String email);
 
+    List<User> findByAyuntamientoIdAndRole(Long ayuntamientoId, Role role);
 
     boolean existsByEmail(String email);
 
@@ -22,6 +24,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsernameOrEmail(@Param("value") String value);
 
     List<User> findByUsernameContainingIgnoreCaseOrFullNameContainingIgnoreCase(String username, String fullName);
+
+    @Query("SELECT u FROM User u WHERE u.ayuntamiento.id = :ayuntamientoId AND u.role = 'ADMIN'")
+    User findAyuntamientoUser(Long ayuntamientoId);
+
 
     Optional<User> findById(Long id);
 

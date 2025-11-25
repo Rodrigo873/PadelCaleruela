@@ -21,6 +21,8 @@ public class Post {
 
     private LocalDateTime createdAt;
 
+    private String imageUrl;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name="user_id")
     private User user;

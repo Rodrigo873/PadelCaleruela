@@ -17,7 +17,9 @@ public class HourSlotDTO {
     private boolean isPublic;
     private List<PlayerInfoDTO> players;
     private boolean esCreador;
-    private Long reservationId; // 👈 nuevo
+    private Long reservationId;
     private BigDecimal precio;
+    private Long pistaId;
+    private String pistaNombre;
 
 }

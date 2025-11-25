@@ -35,8 +35,6 @@ public class AyuntamientoCreateRequest {
     @NotNull(message = "El precio base es obligatorio")
     private BigDecimal precioBase;
 
-    private String immagenUrl;
-
 
     // 🔥 franjas opcionales
     private List<TarifaFranjaDTO> franjas;

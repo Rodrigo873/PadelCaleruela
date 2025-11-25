@@ -31,5 +31,9 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     """)
     List<Post> findFeedForUser(@Param("userId") Long userId);
 
+    // Usado en feed: ya tendrás una query que mezcla amigos + propios + etc.
+
+    List<Post> findByUserId(Long userId);
+
 
 }

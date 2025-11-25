@@ -12,6 +12,7 @@ public class PadelCaleruelaApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(PadelCaleruelaApplication.class, args);
+
 	}
 
 }

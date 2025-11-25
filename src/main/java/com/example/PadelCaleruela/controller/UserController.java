@@ -4,7 +4,9 @@ package com.example.PadelCaleruela.controller;
 import com.example.PadelCaleruela.dto.InfoUserDTO;
 import com.example.PadelCaleruela.dto.PlayerInfoDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
+import com.example.PadelCaleruela.model.Role;
 import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.service.AuthService;
 import com.example.PadelCaleruela.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,7 +23,10 @@ import java.util.Map;
 public class UserController {
 
     private final UserService userService;
-    public UserController(UserService service) { this.userService = service; }
+    private final AuthService authService;
+    public UserController(UserService service,AuthService authService) { this.userService = service;
+        this.authService=authService;
+    }
 
     @GetMapping
     public List<UserDTO> getAll() {
@@ -44,6 +49,35 @@ public class UserController {
         response.put("newRole", newRole);
         return ResponseEntity.ok(response);
     }
+
+    // ⬇️ Añadir dentro de UserController
+    @PutMapping("/{id}/change-ayuntamiento")
+    public ResponseEntity<?> changeAyuntamiento(
+            @PathVariable Long id,
+            @RequestBody Map<String, Long> body) {
+
+        Long newAytoId = body.get("ayuntamientoId");
+
+        User currentUser = authService.getCurrentUser();
+
+        // ❌ ADMIN no puede cambiar ayuntamiento (ni propio ni ajeno)
+        if (currentUser.getRole() == Role.ADMIN) {
+            return ResponseEntity.status(403)
+                    .body("Los administradores no pueden cambiar de ayuntamiento.");
+        }
+
+        // ❌ Usuario normal solo puede cambiar su propio ayuntamiento
+        if (!currentUser.getId().equals(id) &&
+                currentUser.getRole() != Role.SUPERADMIN) {
+            return ResponseEntity.status(403)
+                    .body("No tienes permiso para cambiar el ayuntamiento de este usuario.");
+        }
+
+        UserDTO updated = userService.updateUserAyuntamiento(id, newAytoId);
+
+        return ResponseEntity.ok(updated);
+    }
+
 
 
     @GetMapping("/{id}")

@@ -31,8 +31,10 @@ public class SecurityConfig {
             "/swagger-ui.html",
             "/swagger-resources/**",
             "/webjars/**",
-            "/uploads/**"
-
+            "/uploads/**",
+            "/api/devices/register",
+            "/api/devices/send-test",
+            "/api/ayuntamientos/simple"
     };
 
     @Bean

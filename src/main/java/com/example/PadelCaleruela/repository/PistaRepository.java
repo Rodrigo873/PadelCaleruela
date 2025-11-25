@@ -7,5 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface PistaRepository extends JpaRepository<Pista, Long> {
-    List<Pista> findByAyuntamiento(Ayuntamiento ay);
+    List<Pista> findByAyuntamientoId(Long ayuntamientoId);
+
 }

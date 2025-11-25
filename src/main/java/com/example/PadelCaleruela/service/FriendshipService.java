@@ -2,9 +2,7 @@ package com.example.PadelCaleruela.service;
 
 import com.example.PadelCaleruela.dto.FriendshipDTO;
 import com.example.PadelCaleruela.dto.UserDTO;
-import com.example.PadelCaleruela.model.Friendship;
-import com.example.PadelCaleruela.model.FriendshipStatus;
-import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.FriendshipRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +22,9 @@ public class FriendshipService {
     private final FriendshipRepository friendshipRepository;
     private final UserRepository userRepository;
     private final AuthService authService;
+    private final UserNotificationService userNotificationService;
+    private final NotificationFactory notificationFactory;
+    private final NotificationAppService notificationAppService;
 
 
     // 🔹 Enviar solicitud de amistad
@@ -75,6 +76,17 @@ public class FriendshipService {
         f.setFriend(to);
         f.setStatus(FriendshipStatus.PENDING);
         friendshipRepository.save(f);
+
+        try {
+            userNotificationService.sendToUser(
+                    to.getId(),
+                    from.getUsername(),
+                    NotificationType.FRIEND_REQUEST
+            );
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
 
@@ -128,12 +140,12 @@ public class FriendshipService {
         User sender = userRepository.findById(friendId)
                 .orElseThrow(() -> new RuntimeException("Usuario origen no encontrado"));
 
-        // USER → solo aceptar sus propias solicitudes
+        // USER solo acepta sus propias solicitudes
         if (authService.isUser() && !current.getId().equals(userId)) {
             throw new RuntimeException("No puedes aceptar solicitudes dirigidas a otro usuario.");
         }
 
-        // ADMIN → solo en su ayuntamiento
+        // ADMIN solo dentro de su ayuntamiento
         if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(receiver.getAyuntamiento());
             authService.ensureSameAyuntamiento(sender.getAyuntamiento());
@@ -149,11 +161,37 @@ public class FriendshipService {
 
         f.setStatus(FriendshipStatus.ACCEPTED);
         friendshipRepository.save(f);
+
+        // ---------------------------------------------------------
+        //  🔥 Crear la NOTIFICACIÓN en base de datos (solo BD)
+        // ---------------------------------------------------------
+        NotificationType type = NotificationType.FRIEND_ACCEPT;
+        String title = notificationFactory.getTitle(type);
+        String message = notificationFactory.getMessage(type, receiver.getUsername());
+
+        Notification n = new Notification();
+        n.setUserId(sender.getId());      // el que recibe la notificación
+        n.setSenderId(receiver.getId());  // quien la acepta
+        n.setType(type);
+        n.setTitle(title);
+        n.setMessage(message);
+        n.setExtraData(null); // si quieres añadir datos luego
+
+        notificationAppService.saveNotification(n);
+
+
+        try {
+            userNotificationService.sendToUser(
+                    sender.getId(),
+                    receiver.getUsername(),
+                    NotificationType.FRIEND_REQUEST
+            );
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
     }
-
-
-
-
 
 
     //rechazar
@@ -185,6 +223,35 @@ public class FriendshipService {
 
 
 
+    public void follow(Long followerId, Long followedId) {
+
+        if (followerId.equals(followedId)) return;
+
+        Optional<Friendship> existing =
+                friendshipRepository.findByUserIdAndFriendId(followerId, followedId);
+
+        if (existing.isPresent()) {
+            Friendship fr = existing.get();
+            if (fr.getStatus() != FriendshipStatus.ACCEPTED) {
+                fr.setStatus(FriendshipStatus.ACCEPTED);
+                friendshipRepository.save(fr);
+            }
+            return;
+        }
+
+        User follower = userRepository.findById(followerId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        User followed = userRepository.findById(followedId)
+                .orElseThrow(() -> new RuntimeException("Usuario seguido no encontrado"));
+
+        Friendship f = new Friendship();
+        f.setUser(follower);       // el que sigue
+        f.setFriend(followed);     // seguido
+        f.setStatus(FriendshipStatus.ACCEPTED);
+
+        friendshipRepository.save(f);
+    }
 
 
 

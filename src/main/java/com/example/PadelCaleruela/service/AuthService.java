@@ -3,10 +3,7 @@ package com.example.PadelCaleruela.service;
 import com.example.PadelCaleruela.dto.AuthResponse;
 import com.example.PadelCaleruela.dto.UserDTO;
 import com.example.PadelCaleruela.dto.UserRegister;
-import com.example.PadelCaleruela.model.Ayuntamiento;
-import com.example.PadelCaleruela.model.Role;
-import com.example.PadelCaleruela.model.User;
-import com.example.PadelCaleruela.model.UserStatus;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.UserRepository;
 import com.example.PadelCaleruela.security.CustomUserDetails;
 import jakarta.mail.MessagingException;
@@ -18,6 +15,9 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.security.access.AccessDeniedException;
+
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -31,6 +31,8 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final EmailService emailService;
     private final AyuntamientoService ayuntamientoService;
+    private final NotificationFactory notificationFactory;
+    private final NotificationAppService notificationAppService;
 
     /** 🔹 Registro de usuario */
     public AuthResponse register(UserRegister dto) {
@@ -41,7 +43,9 @@ public class AuthService {
         if (dto.getEmail() == null || !dto.getEmail().matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$")) {
             throw new IllegalArgumentException("❌ Dirección de correo no válida: " + dto.getEmail());
         }
-        User user=new User();
+        System.out.println("Parte 2");
+
+        User user = new User();
         user.setEmail(dto.getEmail());
         user.setFullName(dto.getFullName());
         user.setUsername(dto.getUsername());
@@ -51,26 +55,66 @@ public class AuthService {
                 + user.getUsername()
                 + "&background=0D8ABC&color=fff");
         user.setStatus(UserStatus.ACTIVE);
+        System.out.println("Parte 3");
+
         Ayuntamiento ayuntamiento = ayuntamientoService.findByCodigoPostal(dto.getCodigoPostal());
+        System.out.println("Parte 4");
         user.setAyuntamiento(ayuntamiento);
         userRepository.save(user);
-
+        System.out.println("Parte 5");
         emailService.sendHtmlEmail(
                 user.getEmail(),
                 "Registro completado",
                 "<h3>¡Hola " + user.getUsername() + "!</h3>" +
                         "<p>Bienvenido a la mejor aplicación de pádel del mundo 🎾.</p>"
         );
+        System.out.println("Parte 2");
+
+        // ---------------------------------------------------------
+        // 🔔 NOTIFICACIÓN A TODOS LOS ADMINS DEL AYUNTAMIENTO
+        // ---------------------------------------------------------
+        List<User> admins = userRepository.findByAyuntamientoIdAndRole(ayuntamiento.getId(), Role.ADMIN);
+
+        for (User admin : admins) {
+            try {
+                Notification notification = new Notification();
+                notification.setUserId(admin.getId());             // receptor → admin
+                notification.setSenderId(user.getId());            // remitente → el nuevo usuario
+                notification.setType(NotificationType.ADMIN_USER_REGISTERED);
+                notification.setTitle(notificationFactory.getTitle(NotificationType.ADMIN_USER_REGISTERED));
+                notification.setMessage(notificationFactory.getMessage(NotificationType.ADMIN_USER_REGISTERED, user.getFullName()));
+                notification.setReadFlag(false);
+                notification.setCreatedAt(LocalDateTime.now());
+
+                notificationAppService.saveNotification(notification);
+
+            } catch (Exception e) {
+                System.out.println("⚠ Error guardando notificación de registro para admin " + admin.getId() + ": " + e.getMessage());
+            }
+        }
+
+        // ---------------------------------------------------------
+
 
         // Generar token JWT
         var userDetails = new CustomUserDetails(user);
         var token = jwtService.generateToken(userDetails);
 
-        return new AuthResponse(token, user.getId(), user.getUsername(), user.getEmail(), user.getRole().name());
+        return new AuthResponse(
+                token,
+                user.getId(),
+                user.getUsername(),
+                user.getEmail(),
+                user.getRole().name(),
+                ayuntamiento.getId()
+        );
+
+
     }
 
     /** 🔹 Login de usuario */
     public AuthResponse login(Map<String, String> request) {
+
         String email = request.get("email");
         String password = request.get("password");
 
@@ -86,8 +130,21 @@ public class AuthService {
 
         String role = user.getRole() != null ? user.getRole().name() : "USER";
 
-        return new AuthResponse(token, user.getId(), user.getUsername(), user.getEmail(), role);
+        Long ayto = null;
+
+        // 🔹 Usuarios normales -> deben tener ayto
+        if (user.getRole() != Role.SUPERADMIN) {
+
+            if (user.getAyuntamiento() == null) {
+                throw new IllegalStateException("El usuario no tiene un ayuntamiento asignado");
+            }
+
+            ayto = user.getAyuntamiento().getId();
+        }
+
+        return new AuthResponse(token, user.getId(), user.getUsername(), user.getEmail(), role, ayto);
     }
+
 
     public User getCurrentUser() {
         var auth = SecurityContextHolder.getContext().getAuthentication();

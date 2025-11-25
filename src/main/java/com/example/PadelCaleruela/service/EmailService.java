@@ -19,7 +19,6 @@ public class EmailService {
 
     private final JavaMailSender mailSender;
 
-    // Remitente con nombre "PadelApp"
     @Value("${app.mail.from}")
     private String from;
 
