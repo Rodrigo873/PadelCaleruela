@@ -102,14 +102,23 @@ public class LeagueInvitationService {
 
 
     public long getPendingCount(Long userId) {
+
         User current = authService.getCurrentUser();
 
         if (!authService.isSuperAdmin() && !current.getId().equals(userId)) {
             throw new AccessDeniedException("No puedes ver invitaciones de otro usuario.");
         }
 
-        return invitationRepository.countByReceiverIdAndStatus(userId, InvitationStatus.PENDING);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // Filtramos por mismo ayuntamiento
+        return invitationRepository.findByReceiverIdAndStatus(userId, InvitationStatus.PENDING)
+                .stream()
+                .filter(inv -> inv.getSender().getAyuntamiento().equals(user.getAyuntamiento()))
+                .count();
     }
+
 
 
     public List<LeagueInvitationDTO> getInvitationsForUser(Long userId) {
@@ -118,22 +127,26 @@ public class LeagueInvitationService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        // USER → solo puede ver las suyas
         if (authService.isUser() && !current.getId().equals(userId)) {
             throw new RuntimeException("No puedes ver invitaciones de otros usuarios.");
         }
 
-        // ADMIN → solo en su ayuntamiento
         if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(user.getAyuntamiento());
         }
 
         List<LeagueInvitation> pending = invitationRepository.findByReceiverIdAndStatus(userId, InvitationStatus.PENDING);
 
+        // 🔹 Filtro por ayuntamiento
+        pending = pending.stream()
+                .filter(inv -> inv.getSender().getAyuntamiento().equals(user.getAyuntamiento()))
+                .toList();
+
         return pending.stream()
                 .map(this::mapToDto)
                 .collect(Collectors.toList());
     }
+
 
 
     @Transactional

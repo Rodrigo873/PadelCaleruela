@@ -12,4 +12,6 @@ public class AyuntamientoListDTO {
     private String nombre;
     private String codigoPostal;
     private String imageUrl;
+    private boolean activo;
+    private Integer pistas;
 }

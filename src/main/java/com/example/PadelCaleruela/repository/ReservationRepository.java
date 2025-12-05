@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -18,6 +19,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     @Query("SELECT r FROM Reservation r WHERE r.isPublic = true AND r.startTime > :now AND r.ayuntamiento.id = :ayId")
     List<Reservation> findPublicAvailableReservationsByAyuntamiento(LocalDateTime now, Long ayId);
     List<Reservation> findByAyuntamientoId(Long ayuntamientoId);
+    @Query("SELECT r FROM Reservation r WHERE r.pista.id = :pistaId AND DATE(r.startTime) = :date")
+    List<Reservation> findByPistaIdAndDate(Long pistaId, LocalDate date);
 
     @Query("""
     SELECT COUNT(r) 
@@ -27,6 +30,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     AND r.status = 'CONFIRMED'
     """)
     int countConfirmedByUserId(@Param("userId") Long userId);
+
+    @Query("""
+    SELECT r FROM Reservation r
+    WHERE r.status = com.example.PadelCaleruela.model.ReservationStatus.CONFIRMED
+    AND r.startTime < :now
+    AND r.ayuntamiento.id = :ayId
+    ORDER BY r.startTime DESC
+    """)
+    List<Reservation> findLastConfirmedBeforeNow(@Param("now") LocalDateTime now,
+                                                 @Param("ayId") Long ayId,
+                                                 org.springframework.data.domain.Pageable pageable);
+
 
 
     List<Reservation> findByUserOrderByStartTimeDesc(User user);
@@ -72,6 +87,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     List<Reservation> findByUser_IdAndStatusOrderByCreatedAtDesc(Long userId, ReservationStatus status);
     List<Reservation> findByIdInAndStatusOrderByCreatedAtDesc(List<Long> ids, ReservationStatus status);
 
+    List<Reservation> findByPaidFalseAndStatusAndCreatedAtBetween(
+            ReservationStatus status,
+            LocalDateTime start,
+            LocalDateTime end
+    );
 
 
 

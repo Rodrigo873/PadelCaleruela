@@ -2,7 +2,7 @@ package com.example.PadelCaleruela;
 
 import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.repository.UserRepository;
-import com.example.PadelCaleruela.security.CustomUserDetails;
+import com.example.PadelCaleruela.CustomUserDetails;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

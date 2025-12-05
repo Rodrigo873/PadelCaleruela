@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 @AllArgsConstructor
 public class ReservationPlayerDTO {
+    private long id;
     private String username;
     private String fullName;
     private String status; // ACEPTADA, PENDIENTE, CANCELADA

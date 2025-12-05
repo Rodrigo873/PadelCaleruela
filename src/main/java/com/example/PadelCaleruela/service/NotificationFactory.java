@@ -22,14 +22,20 @@ public class NotificationFactory {
 
             case RESERVATION_CANCELLED -> "Reserva cancelada";
             case RESERVATION_TIME_CANCELLED -> "Reserva cancelada";
+            case PAYMENT_REMINDER -> "Tienes una reserva pendiente";
+
             case RESERVATION_PAYMENT_CONFIRMED -> "Pago confirmado";
             case RESERVATION_PAYMENT_CANCELLED -> "Pago cancelado";
             case RESERVATION_PLAYER_LEFT -> "Un jugador ha salido de la reserva";
+            case MATCH_PLAYER_KICKED -> "Jugador expulsado de la partida";
 
             case LEAGUE_JOINED -> "Nuevo jugador en tu liga";
             case LEAGUE_JOINED_WITH_YOU -> "Nuevo compañero en tu liga";
             case LEAGUE_REJECTED -> "Invitación rechazada";
             case LEAGUE_DELETED -> "Una liga ha sido eliminada";
+            case PLAYER_REMOVED_FROM_TEAM -> "Tu compañero ha sido expulsado";
+            case PLAYER_REMOVED_FROM_LEAGUE -> "Has sido expulsado de la liga";
+
 
             case MATCH_INVITATION_ACCEPTED -> "Un jugador ha aceptado tu invitación";
             case MATCH_INVITATION_REJECTED -> "Invitación rechazada";
@@ -41,6 +47,8 @@ public class NotificationFactory {
             case ADMIN_USER_REGISTERED -> "Nuevo usuario registrado";
             case ADMIN_LEAGUE_CREATED -> "Nueva liga creada";
             case ADMIN_LEAGUE_DELETED -> "Liga eliminada";
+            case POST_LIKED -> "Nuevo me gusta";
+
 
         };
     }
@@ -63,6 +71,11 @@ public class NotificationFactory {
 
             case LEAGUE_INVITATION_REJECT ->
                     senderName + " ha rechazado unirse a tu liga";
+            case PLAYER_REMOVED_FROM_TEAM ->
+                    senderName + " ha expulsado a tu compañero del equipo.";
+            case PLAYER_REMOVED_FROM_LEAGUE ->
+                    senderName + " te ha expulsado de la liga.";
+
 
             case MATCH_INVITATION ->
                     senderName + " te ha invitado a una partida";
@@ -78,6 +91,10 @@ public class NotificationFactory {
 
             case RESERVATION_TIME_CANCELLED ->
                     "Tu reserva ha superado el tiempo de pago y ha sido cancelada";
+
+            case PAYMENT_REMINDER  ->
+                "Quedan 5 minutos para pagar tu reserva";
+
 
             case RESERVATION_PAYMENT_CONFIRMED ->
                     "Tu pago ha sido confirmado correctamente";
@@ -114,6 +131,8 @@ public class NotificationFactory {
 
             case MATCH_PLAYER_LEFT ->
                     senderName + " ha abandonado la partida";
+            case MATCH_PLAYER_KICKED ->
+                    senderName + " te ha expulsado de la partida";
 
             case ADMIN_USER_REGISTERED ->
                     senderName + " se ha registrado en tu ayuntamiento";
@@ -123,6 +142,8 @@ public class NotificationFactory {
 
             case ADMIN_LEAGUE_DELETED ->
                     senderName + " ha eliminado una liga";
+            case POST_LIKED ->
+                    senderName + " ha dado me gusta a tu publicación";
 
         };
     }

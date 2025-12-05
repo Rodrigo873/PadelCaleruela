@@ -2,9 +2,7 @@ package com.example.PadelCaleruela.service;
 
 import com.example.PadelCaleruela.dto.LeagueTeamDTO;
 import com.example.PadelCaleruela.dto.PlayerInfoDTO;
-import com.example.PadelCaleruela.model.League;
-import com.example.PadelCaleruela.model.LeagueTeam;
-import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.LeagueRepository;
 import com.example.PadelCaleruela.repository.LeagueTeamRepository;
 import com.example.PadelCaleruela.repository.UserRepository;
@@ -21,15 +19,24 @@ public class LeagueTeamService {
     private final LeagueTeamRepository teamRepository;
     private final UserRepository userRepository;
     private final AuthService authService;
+    private final NotificationFactory notificationFactory;
+    private final UserNotificationService userNotificationService;
 
+    private final NotificationAppService notificationAppService;
     public LeagueTeamService(LeagueRepository leagueRepository,
                              LeagueTeamRepository teamRepository,
                              UserRepository userRepository,
-                             AuthService authService) {
+                             AuthService authService,
+                             NotificationFactory notificationFactory,
+                             UserNotificationService userNotificationService,
+                             NotificationAppService notificationAppService) {
         this.leagueRepository = leagueRepository;
         this.teamRepository = teamRepository;
         this.userRepository = userRepository;
         this.authService = authService;
+        this.notificationFactory=notificationFactory;
+        this.userNotificationService=userNotificationService;
+        this.notificationAppService=notificationAppService;
     }
 
     // ===================== HELPERS DE SEGURIDAD =====================
@@ -241,6 +248,7 @@ public class LeagueTeamService {
 
     @Transactional
     public void deleteTeam(Long teamId) {
+
         LeagueTeam team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("Equipo no encontrado"));
 
@@ -249,20 +257,62 @@ public class LeagueTeamService {
             throw new RuntimeException("El equipo no tiene liga asociada.");
         }
 
-        // 🔐 Solo creador de la liga / admin / superadmin
-        ensureCanManageLeague(league);
+        User current = authService.getCurrentUser(); // quien expulsa
+        boolean isCreator = league.getCreator().getId().equals(current.getId());
+        boolean isSuperAdmin = authService.isSuperAdmin();
+        boolean isAdmin = authService.isAdmin();
+        boolean isPlayerInTeam = team.getPlayers().stream()
+                .anyMatch(p -> p.getId().equals(current.getId()));
 
+        if (!(isSuperAdmin || isCreator || isAdmin || isPlayerInTeam)) {
+            throw new AccessDeniedException("No tienes permiso para eliminar este equipo.");
+        }
+
+        // 🔥 Notificar a los jugadores ANTES de borrarlos
+        List<User> playersBeforeDelete = List.copyOf(team.getPlayers());
+
+        // 💠 Limpieza correcta
         team.getPlayers().clear();
 
-        if (team.getHomeMatches() != null) {
-            team.getHomeMatches().clear();
-        }
-        if (team.getAwayMatches() != null) {
-            team.getAwayMatches().clear();
-        }
+        if (team.getHomeMatches() != null) team.getHomeMatches().clear();
+        if (team.getAwayMatches() != null) team.getAwayMatches().clear();
 
         teamRepository.delete(team);
+
+        // -----------------------------------------------------------
+        // 🔔 NOTIFICACIONES PUSH + BD
+        // -----------------------------------------------------------
+        for (User u : playersBeforeDelete) {
+            if (u.getId().equals(current.getId())) continue; // no avisarse a sí mismo
+
+            NotificationType type = NotificationType.PLAYER_REMOVED_FROM_TEAM;
+
+            String title = notificationFactory.getTitle(type);
+            String msg = notificationFactory.getMessage(type, current.getUsername());
+
+            Notification n = new Notification();
+            n.setUserId(u.getId());      // receptor
+            n.setSenderId(current.getId()); // quien expulsó
+            n.setType(type);
+            n.setTitle(title);
+            n.setMessage(msg);
+            n.setExtraData(league.getId().toString());
+
+            notificationAppService.saveNotification(n);
+
+            try {
+                userNotificationService.sendToUser(
+                        u.getId(),
+                        current.getUsername(),
+                        type
+                );
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando push: " + e.getMessage());
+            }
+        }
     }
+
+
 
     // ===================== CONSULTAS =====================
 
@@ -274,13 +324,16 @@ public class LeagueTeamService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("League not found"));
 
-        // 🔐 Ver que el actual puede ver la info de este usuario en esa liga
         var current = authService.getCurrentUser();
 
         if (!authService.isSuperAdmin()) {
             authService.ensureSameAyuntamiento(league.getAyuntamiento());
 
-            if (authService.isUser() && !current.getId().equals(userId)) {
+            boolean isCreator = league.getCreator().getId().equals(current.getId());
+
+            // 🔐 Si es USER normal, solo puede ver su equipo,
+            // ❗ pero si es el creador de la liga → puede ver todos
+            if (authService.isUser() && !current.getId().equals(userId) && !isCreator) {
                 throw new AccessDeniedException("No puedes ver el equipo de otro jugador.");
             }
         }
@@ -299,12 +352,19 @@ public class LeagueTeamService {
         dto.setLeagueName(team.getLeague().getName());
         dto.setPlayers(
                 team.getPlayers().stream()
-                        .map(p -> new PlayerInfoDTO(p.getId(), p.getUsername(), p.getProfileImageUrl(), false,p.getStatus()))
+                        .map(p -> new PlayerInfoDTO(
+                                p.getId(),
+                                p.getUsername(),
+                                p.getProfileImageUrl(),
+                                false,
+                                p.getStatus()
+                        ))
                         .toList()
         );
 
         return dto;
     }
+
 
     public boolean isPlayerInTeam(Long leagueId, Long playerId) {
         return !teamRepository.findByLeague_IdAndPlayers_Id(leagueId, playerId).isEmpty();

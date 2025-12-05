@@ -1,9 +1,7 @@
 package com.example.PadelCaleruela.controller;
 
 
-import com.example.PadelCaleruela.dto.InfoUserDTO;
-import com.example.PadelCaleruela.dto.PlayerInfoDTO;
-import com.example.PadelCaleruela.dto.UserDTO;
+import com.example.PadelCaleruela.dto.*;
 import com.example.PadelCaleruela.model.Role;
 import com.example.PadelCaleruela.model.User;
 import com.example.PadelCaleruela.service.AuthService;
@@ -193,4 +191,26 @@ public class UserController {
         boolean deleted = userService.deleteUser(id);
         return deleted ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
+
+    @GetMapping("/following")
+    public ResponseEntity<List<PlayerSimpleDTO>> getUsersIFollow() {
+        return ResponseEntity.ok(userService.getUsersIFollow());
+    }
+
+    @GetMapping("/followers")
+    public ResponseEntity<List<FollowerStatusDTO>> getMyFollowers() {
+        return ResponseEntity.ok(userService.getMyFollowers());
+    }
+
+    @GetMapping("/blocked")
+    public List<PlayerInfoDTO> getMisUsuariosBloqueados() {
+        return userService.getUsuariosQueYoHeBloqueado();
+    }
+
+    @GetMapping("/ayuntamiento/blocked")
+    public List<InfoUserDTO> getUsuariosBloqueadosPorAyuntamiento() {
+        return userService.getUsuariosBloqueadosPorMiAyuntamiento();
+    }
+
+
 }

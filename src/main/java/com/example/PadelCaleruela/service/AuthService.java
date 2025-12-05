@@ -5,11 +5,13 @@ import com.example.PadelCaleruela.dto.UserDTO;
 import com.example.PadelCaleruela.dto.UserRegister;
 import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.UserRepository;
-import com.example.PadelCaleruela.security.CustomUserDetails;
+import com.example.PadelCaleruela.CustomUserDetails;
 import jakarta.mail.MessagingException;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -112,6 +115,19 @@ public class AuthService {
 
     }
 
+    public Long getAyuntamientoId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        if (auth == null || !auth.isAuthenticated()
+                || auth.getPrincipal().equals("anonymousUser")) {
+            return null;
+        }
+
+        CustomUserDetails user = (CustomUserDetails) auth.getPrincipal();
+        return user.getAyuntamientoId();
+    }
+
+
     /** 🔹 Login de usuario */
     public AuthResponse login(Map<String, String> request) {
 
@@ -168,6 +184,19 @@ public class AuthService {
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
     }
 
+    public Long getAyuntamientoIdFromJwt(HttpServletRequest request) {
+
+        String authHeader = request.getHeader("Authorization");
+
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return null;
+        }
+
+        String token = authHeader.substring(7);
+
+        // <- Usa tu servicio JWT actual
+        return jwtService.extractClaim(token, claims -> claims.get("ayuntamientoId", Long.class));
+    }
 
 
     public boolean isSuperAdmin() {

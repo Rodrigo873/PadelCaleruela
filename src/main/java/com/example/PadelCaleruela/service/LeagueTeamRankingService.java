@@ -121,8 +121,6 @@ public class LeagueTeamRankingService {
 
         League league = team1.getLeague();
 
-        ensureCanManageRanking(league);
-
         boolean team1Wins = score1 > score2;
 
         updateTeam(team1, league, team1Wins);

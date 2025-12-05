@@ -60,24 +60,33 @@ public class LeagueRankingService {
 
     /** Para consultar ranking */
     private void ensureCanViewRanking(League league) {
-        var current = authService.getCurrentUser();
 
-        if (authService.isSuperAdmin()) return;
+        User current = authService.getCurrentUser();
 
-        // Debe ser del mismo ayuntamiento
-        authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        // Super admin → acceso total
+        if (authService.isSuperAdmin()) {
+            return;
+        }
 
-        // Si la liga es privada y el usuario no participa ni es creador → prohibido
         boolean isCreator = league.getCreator() != null &&
                 league.getCreator().getId().equals(current.getId());
 
-        boolean isPlayerInLeague = league.getPlayers().stream()
+        boolean isPlayer = league.getPlayers().stream()
                 .anyMatch(u -> u.getId().equals(current.getId()));
 
-        if (!league.getIsPublic() && !isCreator && !isPlayerInLeague) {
+        // Admin → puede ver si es del mismo ayuntamiento
+        if (authService.isAdmin()) {
+            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        }
+
+        // Usuario normal → debe ser creador, jugador o la liga debe ser pública
+        if (!Boolean.TRUE.equals(league.getIsPublic())
+                && !isCreator
+                && !isPlayer) {
             throw new AccessDeniedException("No puedes ver el ranking de una liga privada.");
         }
     }
+
 
 
 

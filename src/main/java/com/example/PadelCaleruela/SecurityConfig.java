@@ -34,7 +34,10 @@ public class SecurityConfig {
             "/uploads/**",
             "/api/devices/register",
             "/api/devices/send-test",
-            "/api/ayuntamientos/simple"
+            "/api/ayuntamientos/simple",
+            "/api/payments/webhook",
+            "/docs/**"
+
     };
 
     @Bean

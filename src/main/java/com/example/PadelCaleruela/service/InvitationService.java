@@ -352,7 +352,11 @@ public class InvitationService {
             }
         }
 
-        var invitations = invitationRepository.findByReceiverAndStatus(user, InvitationStatus.PENDING);
+        // 🔹 Filtrado por usuario receptor Y su ayuntamiento
+        var invitations = invitationRepository.findByReceiverAndStatus(user, InvitationStatus.PENDING)
+                .stream()
+                .filter(inv -> inv.getSender().getAyuntamiento().equals(user.getAyuntamiento()))
+                .toList();
 
         return invitations.stream().map(inv -> {
             var dto = new InvitationDTO();
@@ -374,15 +378,25 @@ public class InvitationService {
     }
 
 
+
     public long getPendingCount(Long userId) {
+
         User current = authService.getCurrentUser();
 
         if (!authService.isSuperAdmin() && !current.getId().equals(userId)) {
             throw new AccessDeniedException("No puedes ver invitaciones de otro usuario.");
         }
 
-        return invitationRepository.countPendingByUserId(userId);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        // 🔹 Contamos solo las del mismo ayuntamiento
+        return invitationRepository.findByReceiverAndStatus(user, InvitationStatus.PENDING)
+                .stream()
+                .filter(inv -> inv.getSender().getAyuntamiento().equals(user.getAyuntamiento()))
+                .count();
     }
+
 
     public boolean hasPending(Long userId) {
         return getPendingCount(userId) > 0;

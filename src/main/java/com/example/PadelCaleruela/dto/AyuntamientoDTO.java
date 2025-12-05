@@ -12,4 +12,5 @@ public class AyuntamientoDTO {
     private String telefono;
     private String email;
     private String imageUrl;
+    private boolean publico;
 }

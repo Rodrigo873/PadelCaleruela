@@ -79,6 +79,9 @@ public class User {
     @JoinColumn(name = "ayuntamiento_id")
     private Ayuntamiento ayuntamiento;
 
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
+    private List<Comment> comments;
+
 
     @Override
     public boolean equals(Object o) {

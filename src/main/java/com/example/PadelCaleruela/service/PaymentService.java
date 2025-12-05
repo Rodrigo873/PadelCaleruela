@@ -37,11 +37,12 @@ public class PaymentService {
     private final EmailService emailService;
     private final AuthService authService;
     private final PricingService pricingService;
+    private final PaymentWebhookService paymentWebhookService;
 
     private static final BigDecimal DEFAULT_PRICE = new BigDecimal("10.00");
 
     @Value("${stripe.secret-key}")
-    private String stripeSecretKey;   // 👈 inyectamos la key de properties
+    private String stripeSecretKey;   // 👈 clave real, NO usar System.getenv aquí
 
     // --------------------------------------------------
     // 🔐 HELPERS DE SEGURIDAD
@@ -103,7 +104,7 @@ public class PaymentService {
         if (ay == null || ay.getStripeAccountId() == null || ay.getStripeAccountId().isBlank()) {
             throw new IllegalStateException("Ayuntamiento sin cuenta de Stripe configurada.");
         }
-        String stripeAccountId = ay.getStripeAccountId();
+        String stripeAccountId = ay.getStripeAccountId().trim();
 
         // 🔄 Reutilizar pago pendiente si existe
         Payment existing = paymentRepository.findByReservation_Id(reservation.getId());
@@ -121,6 +122,7 @@ public class PaymentService {
         p.setProvider(Payment.Provider.STRIPE);
         p.setProviderAccountId(stripeAccountId);  // ⬅️ muy importante para multi-cuenta
         p.setStatus(Payment.Status.PENDING);
+
         BigDecimal precio = pricingService.calcularPrecio(
                 reservation.getStartTime(),
                 reservation.getAyuntamiento()
@@ -130,6 +132,11 @@ public class PaymentService {
         p.setCurrency("EUR");
 
         Payment saved = paymentRepository.save(p);
+
+        // 🔥🔥 SI ES GRATIS, NO HAY STRIPE. SE CONFIRMA DIRECTO 🔥🔥
+        if (precio.compareTo(BigDecimal.ZERO) == 0) {
+            return paymentWebhookService.handleFreeReservation(saved);
+        }
 
         try {
             // Crear PaymentIntent en la CUENTA del ayuntamiento
@@ -141,21 +148,18 @@ public class PaymentService {
 
             paymentRepository.save(saved);
 
-            // (Opcional) auto-success en modo test
-            if ("succeeded".equalsIgnoreCase(intent.getStatus())) {
-                handleAutoSuccess(saved, reservation);
-            }
-
+            // ⚠️ No marcamos SUCCEEDED aquí. Lo hace el webhook.
             PaymentDTO dto = toDTO(saved);
             dto.setClientSecret(intent.getClientSecret());
             dto.setPaymentIntentId(intent.getId());
-            ay.setStripeAccountId(ay.getStripeAccountId().trim());
+            dto.setStripeAccountId(stripeAccountId);
             return dto;
 
         } catch (Exception e) {
             throw new RuntimeException("Error creando PaymentIntent", e);
         }
     }
+
 
     private PaymentDTO returnExistingPayment(Payment existing) {
         if (existing.getStatus() == Payment.Status.SUCCEEDED) {
@@ -165,13 +169,14 @@ public class PaymentService {
         PaymentDTO dto = toDTO(existing);
         dto.setPaymentIntentId(existing.getPaymentIntentId());
         dto.setClientSecret(existing.getPaymentReference());
+        dto.setStripeAccountId(existing.getProviderAccountId());
         return dto;
     }
 
     // --------------------------------------------------
-    // 2️⃣ Confirmar Pago (callback desde frontend)
+    // ⚠️ 2️⃣ Confirmar Pago (callback desde frontend) – NO RECOMENDADO
     // --------------------------------------------------
-
+    // Lo dejo por compatibilidad, pero en producción debes confiar en el webhook.
     @Transactional
     public PaymentDTO confirmPayment(ConfirmPaymentRequest req) {
 
@@ -181,23 +186,9 @@ public class PaymentService {
         // 🔐 Seguridad
         ensureCanAccessReservation(payment.getReservation());
 
-        if (payment.getStatus() != Payment.Status.PENDING) {
-            throw new IllegalStateException("El pago ya fue procesado.");
-        }
-
-        if (req.isSuccess()) {
-            payment.setStatus(Payment.Status.SUCCEEDED);
-            payment.setPaymentReference(req.getReferenceHint());
-
-            Reservation r = payment.getReservation();
-            r.setPaid(true);
-            r.setStatus(ReservationStatus.CONFIRMED);
-            reservationRepository.save(r);
-
-        } else {
-            payment.setStatus(Payment.Status.FAILED);
-            payment.setPaymentReference(req.getReferenceHint());
-        }
+        // En la versión robusta, SOLO actualizamos una pista de referencia,
+        // pero NO cambiamos estado (lo hace el webhook).
+        payment.setPaymentReference(req.getReferenceHint());
 
         Payment saved = paymentRepository.save(payment);
         return toDTO(saved);
@@ -237,7 +228,7 @@ public class PaymentService {
         if (ay == null || ay.getStripeAccountId() == null || ay.getStripeAccountId().isBlank()) {
             throw new IllegalStateException("Ayuntamiento sin cuenta de Stripe configurada.");
         }
-        String stripeAccountId = ay.getStripeAccountId();
+        String stripeAccountId = ay.getStripeAccountId().trim();
 
         String customerId = ensureStripeCustomer(u, stripeAccountId);
         String pmId = u.getDefaultPaymentMethodId();
@@ -248,7 +239,7 @@ public class PaymentService {
         p.setProvider(Payment.Provider.STRIPE);
         p.setProviderAccountId(stripeAccountId);
         p.setStatus(Payment.Status.PENDING);
-        p.setAmount(DEFAULT_PRICE);
+        p.setAmount(DEFAULT_PRICE); // aquí podrías usar también pricingService
         p.setCurrency("EUR");
         paymentRepository.save(p);
 
@@ -269,16 +260,16 @@ public class PaymentService {
             }
 
             RequestOptions opts = RequestOptions.builder()
-                    .setApiKey(System.getenv(stripeSecretKey))   // 🔥 OBLIGATORIO
-                    .setStripeAccount(stripeAccountId)                 // CUENTA CONNECT
+                    .setApiKey(stripeSecretKey)   // ✅ clave directa
+                    .setStripeAccount(stripeAccountId) // CUENTA CONNECT
                     .build();
-
 
             PaymentIntent pi = PaymentIntent.create(b.build(), opts);
 
             p.setPaymentIntentId(pi.getId());
             paymentRepository.save(p);
 
+            // El webhook se encargará de marcar SUCCEEDED/FAILED
             return toDTO(p);
 
         } catch (Exception e) {
@@ -303,8 +294,8 @@ public class PaymentService {
                     .build();
 
             RequestOptions opts = RequestOptions.builder()
-                    .setApiKey(System.getenv(stripeSecretKey))   // 🔥 OBLIGATORIO
-                    .setStripeAccount(stripeAccountId)                 // CUENTA CONNECT
+                    .setApiKey(stripeSecretKey)   // ✅ clave directa
+                    .setStripeAccount(stripeAccountId) // CUENTA CONNECT
                     .build();
 
             Customer c = Customer.create(params, opts);
@@ -318,10 +309,12 @@ public class PaymentService {
         }
     }
 
-    private PaymentIntent createStripeIntent(Payment saved,
-                                             String customerId,
-                                             CheckoutRequest req,
-                                             String stripeAccountId) throws Exception {
+    private PaymentIntent createStripeIntent(
+            Payment saved,
+            String customerId,
+            CheckoutRequest req,
+            String stripeAccountId
+    ) throws Exception {
 
         long amountCents = saved.getAmount().movePointRight(2).longValueExact();
 
@@ -330,11 +323,15 @@ public class PaymentService {
                         .setAmount(amountCents)
                         .setCurrency("eur")
                         .setCustomer(customerId)
-                        .putMetadata("reservationId", String.valueOf(saved.getReservation().getId()))
+
+                        // 🟩 METADATA FUNDAMENTAL PARA EL WEBHOOK
                         .putMetadata("paymentId", String.valueOf(saved.getId()))
+                        .putMetadata("reservationId", String.valueOf(saved.getReservation().getId()))
+
                         .setAutomaticPaymentMethods(
-                                PaymentIntentCreateParams.AutomaticPaymentMethods
-                                        .builder().setEnabled(true).build()
+                                PaymentIntentCreateParams.AutomaticPaymentMethods.builder()
+                                        .setEnabled(true)
+                                        .build()
                         );
 
         if (Boolean.TRUE.equals(req.getSaveCard())) {
@@ -342,29 +339,13 @@ public class PaymentService {
         }
 
         RequestOptions opts = RequestOptions.builder()
-                .setApiKey(System.getenv(stripeSecretKey))   // 🔥 OBLIGATORIO
-                .setStripeAccount(stripeAccountId)                 // CUENTA CONNECT
+                .setApiKey(stripeSecretKey)             // 🟩 CORREGIDO
+                .setStripeAccount(stripeAccountId)
                 .build();
 
-        System.out.println("⚡ PaymentIntent creado en CONNECT account: " + stripeAccountId);
         return PaymentIntent.create(pi.build(), opts);
     }
 
-    // --------------------------------------------------
-    // Helper auto-success (modo test)
-    // --------------------------------------------------
-
-    private void handleAutoSuccess(Payment payment, Reservation reservation) {
-        payment.setStatus(Payment.Status.SUCCEEDED);
-
-        reservation.setPaid(true);
-        reservation.setStatus(ReservationStatus.CONFIRMED);
-
-        reservationRepository.save(reservation);
-        paymentRepository.save(payment);
-
-        // Si quieres, aquí puedes reutilizar el envío de email como en los webhooks
-    }
 
     // --------------------------------------------------
     // DTO Converter
@@ -384,7 +365,6 @@ public class PaymentService {
         dto.setPaymentIntentId(p.getPaymentIntentId());
         dto.setProviderAccountId(p.getProviderAccountId());
         dto.setStripeAccountId(p.getProviderAccountId());
-
         return dto;
     }
 }

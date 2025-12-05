@@ -15,4 +15,5 @@ public class ActualizarAytoYTarifaDTO {
     private String email;
     private String imageUrl;
     private BigDecimal precioBase;
+    private boolean publico;
 }

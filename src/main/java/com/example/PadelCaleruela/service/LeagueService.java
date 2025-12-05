@@ -37,6 +37,8 @@ public class LeagueService {
     private final AppProperties appProperties;
 
     private final UserNotificationService userNotificationService;
+    private final NotificationFactory notificationFactory;
+    private final NotificationAppService notificationAppService;
 
     public LeagueService(
             LeagueRepository leagueRepository,
@@ -49,7 +51,9 @@ public class LeagueService {
             AuthService authService,
             AppProperties appProperties,
             FileStorageService fileStorageService,
-            UserNotificationService userNotificationService
+            UserNotificationService userNotificationService,
+            NotificationAppService notificationAppService,
+            NotificationFactory notificationFactory
     ) {
         this.leagueRepository = leagueRepository;
         this.userRepository = userRepository;
@@ -61,6 +65,8 @@ public class LeagueService {
         this.authService = authService;
         this.appProperties = appProperties;
         this.userNotificationService=userNotificationService;
+        this.notificationFactory=notificationFactory;
+        this.notificationAppService=notificationAppService;
     }
 
 
@@ -144,27 +150,26 @@ public class LeagueService {
             throw new AccessDeniedException("No puedes ver las ligas de otro usuario.");
         }
 
-        // ADMIN → solo si pertenece al mismo ayuntamiento
-        if (authService.isAdmin()) {
-            authService.ensureSameAyuntamiento(player);
-        }
+        // ADMIN → puede ver las ligas de cualquiera (quitamos filtro por ayuntamiento)
 
         return leagueRepository.findAll().stream()
-                // 1️⃣ Filtrar siempre por ligas que creó el usuario
-                .filter(l -> l.getCreator().getId().equals(playerId)
-                        ||
-                        // o en las que participa
-                        l.getPlayers().stream().anyMatch(p -> p.getId().equals(playerId)))
-                // 2️⃣ Filtrar por ayuntamiento pero permitiendo siempre al creador
-                .filter(l -> authService.isSuperAdmin()
-                        || l.getCreator().getId().equals(playerId)
-                        || Objects.equals(l.getAyuntamiento().getId(), player.getAyuntamiento().getId()))
-                // 3️⃣ No incluir ligas finalizadas salvo que el usuario sea el creador
-                .filter(l -> l.getCreator().getId().equals(playerId)
-                        || l.getStatus() != LeagueStatus.FINISHED)
+
+                // Ligas donde es creador o participante
+                .filter(l ->
+                        l.getCreator().getId().equals(playerId) ||
+                                l.getPlayers().stream().anyMatch(p -> p.getId().equals(playerId))
+                )
+
+                // Ligas finalizadas solo las puede ver si fue creador
+                .filter(l ->
+                        l.getCreator().getId().equals(playerId) ||
+                                l.getStatus() != LeagueStatus.FINISHED
+                )
+
                 .map(this::mapToDto)
                 .toList();
     }
+
 
 
 
@@ -217,16 +222,35 @@ public class LeagueService {
 
 
 
-    // 🆕 Obtener jugadores agrupados por parejas
     @Transactional(readOnly = true)
     public List<LeaguePairDTO> getLeagueParticipantsGrouped(Long leagueId) {
 
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
 
-        // 🔐 Multi-ayuntamiento
+        User current = authService.getCurrentUser();
+
+        boolean isCreator = league.getCreator() != null &&
+                league.getCreator().getId().equals(current.getId());
+
+        boolean isPlayer = league.getPlayers().stream()
+                .anyMatch(p -> p.getId().equals(current.getId()));
+
+        // Super admin puede ver cualquier liga
         if (!authService.isSuperAdmin()) {
-            authService.ensureSameAyuntamiento(league.getAyuntamiento());
+
+            // Admin necesita estar en el mismo ayuntamiento
+            if (authService.isAdmin()) {
+                authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            }
+
+            // Usuario normal → solo si pertenece a la liga o es creador,
+            // o si la liga es pública.
+            if (!Boolean.TRUE.equals(league.getIsPublic())
+                    && !isCreator
+                    && !isPlayer) {
+                throw new AccessDeniedException("No puedes ver los participantes de esta liga privada.");
+            }
         }
 
         List<LeagueTeam> teams = leagueTeamRepository.findByLeagueIdWithPlayers(leagueId);
@@ -260,9 +284,11 @@ public class LeagueService {
             pairs.add(new LeaguePairDTO(
                     List.of(p.getId()),
                     List.of(p.getUsername()),
-                    List.of(p.getProfileImageUrl() != null
-                            ? p.getProfileImageUrl()
-                            : "https://ui-avatars.com/api/?name=" + p.getUsername())
+                    List.of(
+                            p.getProfileImageUrl() != null
+                                    ? p.getProfileImageUrl()
+                                    : "https://ui-avatars.com/api/?name=" + p.getUsername()
+                    )
             ));
         }
 
@@ -325,26 +351,32 @@ public class LeagueService {
 
         User current = authService.getCurrentUser();
 
-        if (!authService.isSuperAdmin()) {
+        boolean isCreator = league.getCreator() != null &&
+                league.getCreator().getId().equals(current.getId());
+
+        boolean isPlayer = league.getPlayers().stream()
+                .anyMatch(p -> p.getId().equals(current.getId()));
+
+        // Super admin siempre accede
+        if (authService.isSuperAdmin()) {
+            return mapToDto(league);
+        }
+
+        // Admin → necesita estar en el mismo ayuntamiento
+        if (authService.isAdmin()) {
             authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        }
 
-            boolean isCreator = league.getCreator() != null &&
-                    league.getCreator().getId().equals(current.getId());
-
-            boolean isPlayer = league.getPlayers().stream()
-                    .anyMatch(p -> p.getId().equals(current.getId()));
-
-            // Si no es pública y no participa → fuera
-            if (!Boolean.TRUE.equals(league.getIsPublic()) &&
-                    !isCreator &&
-                    !isPlayer &&
-                    !authService.isAdmin()) {
-                throw new AccessDeniedException("No puedes acceder a esta liga privada.");
-            }
+        // Si no es pública y no es creador ni jugador → fuera
+        if (!Boolean.TRUE.equals(league.getIsPublic())
+                && !isCreator
+                && !isPlayer) {
+            throw new AccessDeniedException("No puedes acceder a esta liga privada.");
         }
 
         return mapToDto(league);
     }
+
 
 
     @Transactional
@@ -416,20 +448,62 @@ public class LeagueService {
         User player = userRepository.findById(playerId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        User current = authService.getCurrentUser();
+        User current = authService.getCurrentUser(); // quien expulsa o se auto-elimina
 
+        // Multitenant
         if (!authService.isSuperAdmin()) {
             authService.ensureSameAyuntamiento(league.getAyuntamiento());
             authService.ensureSameAyuntamiento(player);
         }
 
-        // USER → solo puede borrarse a sí mismo
-        if (authService.isUser() && !current.getId().equals(playerId)) {
-            throw new AccessDeniedException("No puedes eliminar a otro jugador de la liga.");
+        boolean isCreator = league.getCreator().getId().equals(current.getId());
+
+        // USER → solo si es creador o si se elimina a sí mismo
+        if (authService.isUser() && !isCreator && !current.getId().equals(playerId)) {
+            throw new AccessDeniedException("Solo el creador puede expulsar jugadores de la liga.");
         }
 
+        // ADMIN → igual
+        if (authService.isAdmin() && !isCreator && !current.getId().equals(playerId)) {
+            throw new AccessDeniedException("Solo el creador puede expulsar jugadores de la liga.");
+        }
+
+        // SUPERADMIN → sin restricciones
+
+
+        // 🔥 NOTIFICACIÓN ANTES DE ELIMINAR
+        if (!current.getId().equals(playerId)) { // solo si no se auto-expulsa
+            NotificationType type = NotificationType.PLAYER_REMOVED_FROM_LEAGUE;
+
+            String title = notificationFactory.getTitle(type);
+            String message = notificationFactory.getMessage(type, current.getUsername());
+
+            Notification n = new Notification();
+            n.setUserId(player.getId());      // receptor
+            n.setSenderId(current.getId());   // expulsor
+            n.setType(type);
+            n.setTitle(title);
+            n.setMessage(message);
+            n.setExtraData(league.getId().toString());
+
+            notificationAppService.saveNotification(n);
+
+            try {
+                userNotificationService.sendToUser(
+                        player.getId(),
+                        current.getUsername(),
+                        type
+                );
+            } catch (Exception e) {
+                System.out.println("⚠ Error enviando push expulsión liga: " + e.getMessage());
+            }
+        }
+
+        // 🔥 Eliminar jugador de la liga
         league.removePlayer(player);
     }
+
+
 
 
     @Transactional

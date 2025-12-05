@@ -31,4 +31,9 @@ public class Ayuntamiento {
     @OneToMany(mappedBy = "ayuntamiento")
     private List<User> usuarios;
 
+    private boolean activo;
+
+    // 🔥 NUEVO CAMPO
+    @Column(nullable = false)
+    private boolean publico = false;
 }

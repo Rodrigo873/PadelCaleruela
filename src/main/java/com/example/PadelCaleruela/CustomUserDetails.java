@@ -1,4 +1,4 @@
-package com.example.PadelCaleruela.security;
+package com.example.PadelCaleruela;
 
 import com.example.PadelCaleruela.model.User;
 import org.springframework.security.core.GrantedAuthority;
@@ -30,6 +30,10 @@ public class CustomUserDetails implements UserDetails {
     @Override
     public String getUsername() {
         return user.getEmail();
+    }
+
+    public Long getAyuntamientoId() {
+        return user.getAyuntamiento().getId();
     }
 
     @Override

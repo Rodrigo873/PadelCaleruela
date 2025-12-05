@@ -1,7 +1,6 @@
 package com.example.PadelCaleruela.dto;
 
 import jakarta.validation.constraints.*;
-
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -31,11 +30,20 @@ public class AyuntamientoCreateRequest {
     @NotBlank(message = "El email es obligatorio")
     private String email;
 
-    // 🔥 nueva propiedad
     @NotNull(message = "El precio base es obligatorio")
     private BigDecimal precioBase;
 
-
     // 🔥 franjas opcionales
     private List<TarifaFranjaDTO> franjas;
+
+    @NotBlank(message = "La hora de apertura es obligatoria")
+    @Pattern(regexp = "^([01]\\d|2[0-3]):[0-5]\\d$", message = "Hora de apertura inválida (formato HH:mm)")
+    private String horaApertura;
+
+    @NotBlank(message = "La hora de cierre es obligatoria")
+    @Pattern(regexp = "^([01]\\d|2[0-3]):[0-5]\\d$", message = "Hora de cierre inválida (formato HH:mm)")
+    private String horaCierre;
+
+    @NotNull(message = "El campo publico es obligatorio")
+    private Boolean publico;
 }

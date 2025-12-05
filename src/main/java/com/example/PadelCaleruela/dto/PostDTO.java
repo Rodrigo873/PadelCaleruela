@@ -19,4 +19,6 @@ public class PostDTO {
     // 🔥 Nuevos datos del usuario
     private String username;
     private String userImageUrl;
+    private long likesCount;
+    private boolean likedByCurrentUser;
 }

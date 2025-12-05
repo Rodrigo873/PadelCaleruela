@@ -326,10 +326,12 @@ public class FriendshipService {
 
     //Lista de solicitudes recibidas
     public List<FriendshipDTO> getPendingRequests(Long userId) {
+
         return friendshipRepository.findAll().stream()
                 .filter(f -> f.getFriend().getId().equals(userId)
                         && f.getStatus() == FriendshipStatus.PENDING)
                 .map(f -> {
+
                     FriendshipDTO dto = new FriendshipDTO();
                     dto.setId(f.getId());
                     dto.setUserId(f.getUser().getId());
@@ -337,14 +339,29 @@ public class FriendshipService {
                     dto.setStatus(f.getStatus());
                     dto.setCreatedAt(f.getCreatedAt());
 
-                    // 🧩 Datos del usuario que envió la solicitud
+                    // Datos del usuario que envió la solicitud
+                    dto.setSenderId(f.getUser().getId());
                     dto.setSenderUsername(f.getUser().getUsername());
                     dto.setSenderProfileImageUrl(f.getUser().getProfileImageUrl());
+
+                    // ==========================================================
+                    // 🔥 NUEVA LÓGICA → tu relación hacia el sender
+                    // ==========================================================
+                    Friendship reverse = friendshipRepository
+                            .findByUserIdAndFriendId(userId, f.getUser().getId())
+                            .orElse(null);
+
+                    if (reverse == null) {
+                        dto.setStatusYou(FriendshipStatus.REJECTED); // sin relación
+                    } else {
+                        dto.setStatusYou(reverse.getStatus()); // PENDING o ACCEPTED
+                    }
 
                     return dto;
                 })
                 .collect(Collectors.toList());
     }
+
 
 
     public long getPendingCount(Long userId) {

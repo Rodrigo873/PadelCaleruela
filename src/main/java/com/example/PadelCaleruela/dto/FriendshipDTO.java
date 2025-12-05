@@ -20,5 +20,7 @@ public class FriendshipDTO {
     private String senderUsername;
     private String senderProfileImageUrl;
     private Long senderId;
+    private FriendshipStatus statusYou; // 🔥 NUEVO: tu relación hacia él
+
 
 }

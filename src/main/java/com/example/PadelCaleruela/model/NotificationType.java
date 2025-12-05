@@ -16,6 +16,8 @@ public enum NotificationType {
     RESERVATION_CANCELLED,
     RESERVATION_TIME_CANCELLED,
 
+    PAYMENT_REMINDER,
+
     RESERVATION_PAYMENT_CONFIRMED,
     RESERVATION_PAYMENT_CANCELLED,
     RESERVATION_PLAYER_LEFT,
@@ -28,12 +30,24 @@ public enum NotificationType {
     MATCH_INVITATION_ACCEPTED,
     MATCH_INVITATION_REJECTED,
     MATCH_JOINED_WITH_YOU,
+    MATCH_PLAYER_KICKED,
+
 
     PUBLIC_MATCH_JOINED,            // 🔥 NUEVO (unirse a partida pública)
     MATCH_PLAYER_LEFT,            // 🔥 NUEVO (abandonar partida)
 
     ADMIN_USER_REGISTERED,
     ADMIN_LEAGUE_CREATED,
-    ADMIN_LEAGUE_DELETED
+    ADMIN_LEAGUE_DELETED,
+
+    POST_LIKED,          // alguien te da like
+
+    PLAYER_REMOVED_FROM_TEAM,
+    PLAYER_REMOVED_FROM_LEAGUE
+
+
+
+
+
 
     }

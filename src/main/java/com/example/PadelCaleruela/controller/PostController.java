@@ -2,11 +2,13 @@ package com.example.PadelCaleruela.controller;
 
 import com.example.PadelCaleruela.dto.PostDTO;
 import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.model.Visibility;
 import com.example.PadelCaleruela.service.AuthService;
 import com.example.PadelCaleruela.service.PostService;
 import com.example.PadelCaleruela.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -66,6 +68,17 @@ public class PostController {
                 postService.getPostsByUser(userId, currentUser)
         );
     }
+
+    @PatchMapping("/{postId}/visibility")
+    public ResponseEntity<PostDTO> updateVisibility(
+            @PathVariable Long postId,
+            @RequestParam Visibility visibility) {
+        User currentUser = authService.getCurrentUser();
+
+        PostDTO updated = postService.updatePostVisibility(postId, visibility, currentUser);
+        return ResponseEntity.ok(updated);
+    }
+
 
 
     // 🔹 Obtener un post por id (respetando visibilidad)

@@ -48,7 +48,6 @@ public class LeagueMatchController {
         // 🧩 Extraer los sets del JSON
         @SuppressWarnings("unchecked")
         List<Map<String, Integer>> sets = (List<Map<String, Integer>>) payload.get("sets");
-
         if (sets == null || sets.isEmpty()) {
             throw new RuntimeException("Debe enviar al menos un set con los resultados.");
         }

@@ -36,7 +36,7 @@ public class TarifaService {
                 .getPrincipal();
 
         // Usuario SUPERADMIN o ADMIN
-        if (principal instanceof com.example.PadelCaleruela.security.CustomUserDetails cud) {
+        if (principal instanceof com.example.PadelCaleruela.CustomUserDetails cud) {
 
             User currentUser = cud.getUser();
 

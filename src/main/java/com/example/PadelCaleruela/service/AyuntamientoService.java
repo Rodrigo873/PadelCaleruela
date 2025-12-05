@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.SecureRandom;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,7 +39,7 @@ public class AyuntamientoService {
 
     private final EmailService emailService;
 
-    private final ImageService imageService;
+    private final BlockRepository blockRepository;
     private final AppProperties appProperties; // contiene baseUrl
 
 
@@ -46,7 +47,7 @@ public class AyuntamientoService {
     public AyuntamientoService(AyuntamientoRepository repo, TarifaFranjaRepository franjaRepo,
                                PistaRepository pistaRepo, TarifaRepository tarifaRepo,
                                UserRepository userRepository, PasswordEncoder passwordEncoder,
-                               EmailService emailService,ImageService imageService,AppProperties appProperties){
+                               EmailService emailService,BlockRepository blockRepository,AppProperties appProperties){
         this.repo=repo;
         this.franjaRepo=franjaRepo;
         this.pistaRepo=pistaRepo;
@@ -54,8 +55,8 @@ public class AyuntamientoService {
         this.userRepository=userRepository;
         this.passwordEncoder=passwordEncoder;
         this.emailService=emailService;
-        this.imageService=imageService;
         this.appProperties=appProperties;
+        this.blockRepository=blockRepository;
     }
 
     public Ayuntamiento findByCodigoPostal(String cp) {
@@ -95,6 +96,8 @@ public class AyuntamientoService {
         a.setStripeAccountId(req.getStripeAccountId());
         a.setTelefono(req.getTelefono());
         a.setEmail(req.getEmail());
+        a.setActivo(true);
+        a.setPublico(req.getPublico());
 
         // 2.1️⃣ Subir imagen si viene
         if (image != null && !image.isEmpty()) {
@@ -117,6 +120,11 @@ public class AyuntamientoService {
             p.setAyuntamiento(saved);
             p.setNombre("Pista " + i);
             p.setActiva(true);
+
+            // ⏰ Asignar horario desde el request
+            p.setApertura(LocalTime.parse(req.getHoraApertura()));
+            p.setCierre(LocalTime.parse(req.getHoraCierre()));
+
             pistaRepo.save(p);
         }
 
@@ -166,6 +174,16 @@ public class AyuntamientoService {
         String rawPassword = sb.toString();
 
         admin.setPassword(passwordEncoder.encode(rawPassword));
+        // 2.1️⃣ Subir imagen si viene
+        if (image != null && !image.isEmpty()) {
+            String imageUrl = null;
+            try {
+                imageUrl = saveAyuntamientoImage(image);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            admin.setProfileImageUrl(imageUrl);
+        }
         userRepository.save(admin);
 
         // ---------------------------------------------------------
@@ -174,11 +192,11 @@ public class AyuntamientoService {
         String html = """
             <html>
             <body>
-                <h2>Bienvenido a PadelApp 🎾</h2>
+                <h2>Bienvenido a BoostPlay 🎾</h2>
                 <p>Se ha creado su ayuntamiento: <b>%s</b></p>
                 <p>Estas son sus credenciales de acceso:</p>
                 <ul>
-                    <li><b>Usuario:</b> %s</li>
+                    <li><b>Correo:</b> %s</li>
                     <li><b>Contraseña:</b> %s</li>
                 </ul>
                 <p>Puede cambiar la contraseña desde la app.</p>
@@ -186,13 +204,13 @@ public class AyuntamientoService {
             </html>
             """.formatted(
                 saved.getNombre(),
-                admin.getUsername(),
+                admin.getEmail(),
                 rawPassword
         );
 
         emailService.sendHtmlEmail(
                 saved.getEmail(),
-                "Acceso administrador a PadelApp",
+                "Acceso administrador a BoosPlay",
                 html
         );
 
@@ -206,7 +224,7 @@ public class AyuntamientoService {
                                                            ActualizarAytoYTarifaDTO dto,
                                                            MultipartFile image) {
 
-        com.example.PadelCaleruela.security.CustomUserDetails cud = (com.example.PadelCaleruela.security.CustomUserDetails) SecurityContextHolder.getContext()
+        com.example.PadelCaleruela.CustomUserDetails cud = (com.example.PadelCaleruela.CustomUserDetails) SecurityContextHolder.getContext()
                 .getAuthentication()
                 .getPrincipal();
 
@@ -235,6 +253,7 @@ public class AyuntamientoService {
         a.setStripeAccountId(dto.getStripeAccountId());
         a.setTelefono(dto.getTelefono());
         a.setEmail(dto.getEmail());
+        a.setPublico(dto.isPublico());
 
         // ⭐ Actualizar imagen si llega
         if (image != null && !image.isEmpty()) {
@@ -265,7 +284,7 @@ public class AyuntamientoService {
     @PreAuthorize("hasRole('ADMIN') or hasRole('SUPERADMIN')")
     public AyuntamientoDTO getAyuntamientoById(Long id) {
 
-        com.example.PadelCaleruela.security.CustomUserDetails cud = (com.example.PadelCaleruela.security.CustomUserDetails) SecurityContextHolder.getContext()
+        com.example.PadelCaleruela.CustomUserDetails cud = (com.example.PadelCaleruela.CustomUserDetails) SecurityContextHolder.getContext()
                 .getAuthentication()
                 .getPrincipal();
 
@@ -289,17 +308,26 @@ public class AyuntamientoService {
         return mapToDTO(ayto);
     }
 
-    public List<AyuntamientoListDTO> getAyuntamientosSimple() {
+    public List<AyuntamientoListDTO> getAyuntamientosSimple(User current) {
 
-        return repo.findAll().stream()
+
+        return repo.findByActivoTrueAndPublicoTrue().stream()
+
+                // 🔥 EXCLUIR AYUNTAMIENTOS QUE BLOQUEAN AL USUARIO
+                .filter(a -> !blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(current, a))
+
                 .map(a -> new AyuntamientoListDTO(
                         a.getId(),
                         a.getNombre(),
                         a.getCodigoPostal(),
-                        a.getImageUrl()
+                        a.getImageUrl(),
+                        true,
+                        a.getNumeroPistas()
                 ))
                 .toList();
     }
+
+
 
 
     public List<AyuntamientoListDTO> listarAyuntamientos() {
@@ -310,6 +338,12 @@ public class AyuntamientoService {
                     dto.setNombre(a.getNombre());
                     dto.setCodigoPostal(a.getCodigoPostal());
                     dto.setImageUrl(a.getImageUrl());
+                    dto.setActivo(a.isActivo());
+                    if (a.getNumeroPistas()!=null) {
+                        dto.setPistas(a.getNumeroPistas());
+                    }else {
+                        dto.setPistas(0);
+                    }
                     return dto;
                 })
                 .toList();
@@ -503,6 +537,51 @@ public class AyuntamientoService {
         return mapToDTO(t);
     }
 
+    @Transactional
+    public void moverUsuariosAlAyuntamientoNeutral(Long aytoId,String codigoPostal) {
+
+        Ayuntamiento neutral = repo.findByCodigoPostal(codigoPostal)
+                .orElseThrow(() -> new RuntimeException("Ayuntamiento neutral no existe"));
+
+        List<User> usuarios = userRepository.findByAyuntamientoId(aytoId);
+
+        for (User u : usuarios) {
+            u.setAyuntamiento(neutral);
+            u.setRole(Role.USER);
+        }
+
+        userRepository.saveAll(usuarios);
+    }
+
+    @Transactional
+    public void desactivarAyuntamiento(Long ayuntamientoId) {
+
+        Ayuntamiento ay =repo.findById(ayuntamientoId)
+                .orElseThrow(() -> new RuntimeException("Ayuntamiento no encontrado"));
+
+        ay.setActivo(false);
+        repo.save(ay);
+
+        moverUsuariosAlAyuntamientoNeutral(ayuntamientoId,"99999");
+    }
+
+    public void activarAyuntamiento(Long ayuntamientoId) {
+
+        Ayuntamiento ay = repo.findById(ayuntamientoId)
+                .orElseThrow(() -> new RuntimeException("Ayuntamiento no encontrado."));
+
+        ay.setActivo(true);
+        repo.save(ay);
+    }
+
+    public AyuntamientoBasicDTO getBasicInfo(Long aytoId) {
+
+        Ayuntamiento ay = repo.findById(aytoId)
+                .orElseThrow(() -> new RuntimeException("Ayuntamiento no encontrado"));
+
+        return new AyuntamientoBasicDTO(ay.getId(), ay.getCodigoPostal());
+    }
+
     private TarifaDTO mapToDTO(Tarifa t) {
         TarifaDTO dto = new TarifaDTO();
         dto.setId(t.getId());
@@ -531,6 +610,7 @@ public class AyuntamientoService {
         dto.setTelefono(a.getTelefono());
         dto.setEmail(a.getEmail());
         dto.setImageUrl(a.getImageUrl());
+        dto.setPublico(a.isPublico());
         return dto;
     }
 

@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 
@@ -21,5 +22,6 @@ public class HourSlotDTO {
     private BigDecimal precio;
     private Long pistaId;
     private String pistaNombre;
+    private LocalDate date;
 
 }

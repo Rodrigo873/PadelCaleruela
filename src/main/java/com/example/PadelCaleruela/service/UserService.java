@@ -2,9 +2,7 @@ package com.example.PadelCaleruela.service;
 
 
 import com.example.PadelCaleruela.AppProperties;
-import com.example.PadelCaleruela.dto.InfoUserDTO;
-import com.example.PadelCaleruela.dto.PlayerInfoDTO;
-import com.example.PadelCaleruela.dto.UserDTO;
+import com.example.PadelCaleruela.dto.*;
 import com.example.PadelCaleruela.model.*;
 import com.example.PadelCaleruela.repository.*;
 import jakarta.transaction.Transactional;
@@ -42,6 +40,8 @@ public class UserService {
 
     private final AyuntamientoRepository ayuntamientoRepository;
 
+    private final BlockRepository blockRepository;
+
 
     private static final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/profile-images/";
 
@@ -56,7 +56,8 @@ public class UserService {
             AuthService authService,
             AppProperties appProperties,
             FollowRepository followRepository,
-            AyuntamientoRepository ayuntamientoRepository
+            AyuntamientoRepository ayuntamientoRepository,
+            BlockRepository blockRepository
     ) {
         this.userRepository = repo;
         this.passwordEncoder = passwordEncoder;
@@ -68,6 +69,7 @@ public class UserService {
         this.appProperties = appProperties;
         this.followRepository=followRepository;
         this.ayuntamientoRepository=ayuntamientoRepository;
+        this.blockRepository=blockRepository;
     }
 
 
@@ -208,8 +210,6 @@ public class UserService {
 
     public UserDTO saveUser(User user) {
 
-        User current = authService.getCurrentUser();
-
         // ===============================
         // 🚫 NADIE puede crear SUPERADMIN
         // ===============================
@@ -222,24 +222,8 @@ public class UserService {
         // ======================================================
         if (authService.isAdmin()) {
 
-            if (user.getAyuntamiento() == null ||
-                    current.getAyuntamiento() == null ||
-                    !Objects.equals(
-                            user.getAyuntamiento().getId(),
-                            current.getAyuntamiento().getId()
-                    )) {
-
-                throw new AccessDeniedException(
-                        "Un administrador solo puede crear usuarios en su ayuntamiento."
-                );
-            }
-
-            // 🚫 ADMIN NO puede crear administradores. Solo USER.
-            if (user.getRole() == Role.ADMIN) {
-                throw new AccessDeniedException(
-                        "Un administrador no puede crear otros administradores."
-                );
-            }
+            Long aytoId = authService.getAyuntamientoId();
+            user.setAyuntamiento(ayuntamientoRepository.getReferenceById(aytoId));
         }
 
         // ======================================================
@@ -345,15 +329,49 @@ public class UserService {
         User target = userRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
 
-        // Si quieres limitar por ayuntamiento para TODOS menos superadmin:
         User current = authService.getCurrentUser();
+
+        // ===============================================
+        // 1) SuperAdmin puede ver a cualquiera
+        // ===============================================
         if (!authService.isSuperAdmin()) {
             authService.ensureSameAyuntamiento(target);
         }
 
-        // Aquí devuelves solo info pública
-        return toPlayerInfoDTO(target); // o como lo tengas mapeado
+        // ===============================================
+        // 2) No mostrar si el target ha bloqueado al actual
+        // ===============================================
+        if (blockRepository.existsByBlockedUserAndBlockedByUser(current, target)) {
+            throw new AccessDeniedException("Este usuario te ha bloqueado.");
+        }
+
+        // ===============================================
+        // 3) No mostrar si el actual ha bloqueado al target
+        // ===============================================
+        if (blockRepository.existsByBlockedUserAndBlockedByUser(target, current)) {
+            throw new AccessDeniedException("Has bloqueado a este usuario.");
+        }
+
+        // ===============================================
+        // 4) No mostrar si el ayuntamiento del target ha bloqueado al actual
+        // ===============================================
+        if (blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(current, target.getAyuntamiento())) {
+            throw new AccessDeniedException("Este ayuntamiento te ha bloqueado.");
+        }
+
+        // ===============================================
+        // 5) No mostrar si el ayuntamiento del actual bloqueó al target
+        // ===============================================
+        if (blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(target, current.getAyuntamiento())) {
+            throw new AccessDeniedException("Tu ayuntamiento ha bloqueado a este usuario.");
+        }
+
+        // ===============================================
+        // 6) Si ninguno bloquea a nadie → devolver perfil
+        // ===============================================
+        return toPlayerInfoDTO(target);
     }
+
 
 
 
@@ -362,20 +380,61 @@ public class UserService {
 
         User current = authService.getCurrentUser();
 
-        List<User> results = userRepository.findByUsernameContainingIgnoreCaseOrFullNameContainingIgnoreCase(username, username);
+        List<User> results =
+                userRepository.findByUsernameContainingIgnoreCaseOrFullNameContainingIgnoreCase(
+                        username, username
+                );
 
+        // ===============================================
+        // SuperAdmin ve TODO sin restricciones
+        // ===============================================
         if (authService.isSuperAdmin()) {
-            return results.stream().map(this::toDTO).toList();
+            return results.stream()
+                    .map(this::toDTO)
+                    .toList();
         }
 
-        // Filtrar por ayuntamiento (ADMIN y USER)
         Long ayId = current.getAyuntamiento().getId();
 
         return results.stream()
+                // ===============================
+                // 1) Usuario del mismo ayuntamiento
+                // ===============================
                 .filter(u -> Objects.equals(u.getAyuntamiento().getId(), ayId))
+
+                // ===============================
+                // 2) Descarta usuarios que me bloquean
+                // ===============================
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByUser(current, u))
+
+                // ===============================
+                // 3) Descarta usuarios que yo bloqueé
+                // ===============================
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByUser(u, current))
+
+                // ===============================
+                // 4) Ayuntamiento del usuario me bloquea
+                // ===============================
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(
+                        current,
+                        u.getAyuntamiento()
+                ))
+
+                // ===============================
+                // 5) Mi ayuntamiento bloqueó al usuario
+                // ===============================
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(
+                        u,
+                        current.getAyuntamiento()
+                ))
+
+                // ===============================
+                // 6) Convertir a DTO
+                // ===============================
                 .map(this::toDTO)
                 .toList();
     }
+
 
 
     public UserDTO updateUserProfile(Long id, String fullName, String username,
@@ -504,9 +563,10 @@ public class UserService {
         });
     }
 
-    public boolean isFollowing(Long followerId, Long targetId) {
-        return followRepository.existsByFollowerIdAndFollowedId(followerId, targetId);
+    public boolean isFollowing(Long viewerId, Long ownerId) {
+        return friendshipRepository.existsByUsersAndStatusAccepted(viewerId, ownerId);
     }
+
 
     /**
      * 🔹 Obtiene los amigos de mis amigos (sugerencias)
@@ -600,6 +660,38 @@ public class UserService {
         }
 
         // --------------------------------------------------------------------
+        // 🟢 NUEVO: Filtrar solo jugadores disponibles (estado ACTIVE)
+        // --------------------------------------------------------------------
+                suggestedUsers = suggestedUsers.stream()
+                        .filter(u -> u.getStatus() == UserStatus.ACTIVE)
+                        .toList();
+
+// --------------------------------------------------------------------
+// 🔥 NUEVO: Filtrar usuarios bloqueados o que han bloqueado al usuario actual
+// --------------------------------------------------------------------
+        suggestedUsers = suggestedUsers.stream()
+
+                // Usuario actual bloqueado por el target
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByUser(current, u))
+
+                // Usuario actual ha bloqueado al target
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByUser(u, current))
+
+                // Ayuntamiento del target ha bloqueado al usuario actual
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(
+                        current,
+                        u.getAyuntamiento()
+                ))
+
+                // Ayuntamiento del usuario actual ha bloqueado al target
+                .filter(u -> !blockRepository.existsByBlockedUserAndBlockedByAyuntamiento(
+                        u,
+                        current.getAyuntamiento()
+                ))
+
+                .toList();
+
+        // --------------------------------------------------------------------
         // 🎯 Convertir a DTO y devolver
         // --------------------------------------------------------------------
         return suggestedUsers.stream()
@@ -613,22 +705,74 @@ public class UserService {
     public List<UserDTO> findAvailablePlayers() {
 
         User current = authService.getCurrentUser();
+        Long currentId = current.getId();
+        Long ayId = current.getAyuntamiento() != null ? current.getAyuntamiento().getId() : null;
 
+        // ============================================================
+        // 1️⃣ Usuarios que YO he bloqueado (user → user)
+        // ============================================================
+        Set<Long> yoBloqueo = blockRepository.findByBlockedByUser(current)
+                .stream()
+                .map(b -> b.getBlockedUser().getId())
+                .collect(Collectors.toSet());
+
+        // ============================================================
+        // 2️⃣ Usuarios que ME han bloqueado (user → me)
+        // ============================================================
+        Set<Long> meBloquearon = blockRepository.findByBlockedUser(current)
+                .stream()
+                .filter(b -> b.getBlockedByUser() != null)
+                .map(b -> b.getBlockedByUser().getId())
+                .collect(Collectors.toSet());
+
+        // ============================================================
+        // 3️⃣ Usuarios bloqueados por MI ayuntamiento (ayto → otros)
+        // ============================================================
+        Set<Long> aytoBloquea = blockRepository.findByBlockedByAyuntamiento(current.getAyuntamiento())
+                .stream()
+                .map(b -> b.getBlockedUser().getId())
+                .collect(Collectors.toSet());
+
+        // ============================================================
+        // 4️⃣ Ayuntamientos que me han bloqueado a mí (ayto → me)
+        // ============================================================
+        Set<Long> aytosQueMeBloquearon = blockRepository.findByBlockedUser(current)
+                .stream()
+                .filter(b -> b.getBlockedByAyuntamiento() != null)
+                .map(b -> b.getBlockedByAyuntamiento().getId())
+                .collect(Collectors.toSet());
+
+        // ============================================================
+        // 5️⃣ Obtener jugadores activos
+        // ============================================================
+        List<User> activos = userRepository.findByStatus(UserStatus.ACTIVE);
+
+        // ============================================================
+        // ⭐ SUPERADMIN: ve todos excepto bloqueados
+        // ============================================================
         if (authService.isSuperAdmin()) {
-            return userRepository.findByStatus(UserStatus.ACTIVE)
-                    .stream()
+            return activos.stream()
+                    .filter(u -> !yoBloqueo.contains(u.getId()))
+                    .filter(u -> !meBloquearon.contains(u.getId()))
+                    .filter(u -> !aytoBloquea.contains(u.getId()))
                     .map(this::toDTO)
                     .toList();
         }
 
-        Long ayId = current.getAyuntamiento().getId();
-
-        return userRepository.findByStatus(UserStatus.ACTIVE)
-                .stream()
-                .filter(u -> Objects.equals(u.getAyuntamiento().getId(), ayId))
+        // ============================================================
+        // ⭐ ADMIN / USER: mismos filtros + filtrar por ayuntamiento
+        // ============================================================
+        return activos.stream()
+                .filter(u -> Objects.equals(u.getAyuntamiento().getId(), ayId)) // mismo ayto
+                .filter(u -> !yoBloqueo.contains(u.getId()))                     // yo lo bloqueé
+                .filter(u -> !meBloquearon.contains(u.getId()))                 // me bloqueó él
+                .filter(u -> !aytoBloquea.contains(u.getId()))                  // mi ayto lo bloqueó
+                .filter(u -> !aytosQueMeBloquearon.contains(ayId))              // su ayto me bloqueó
                 .map(this::toDTO)
                 .toList();
     }
+
+
 
 
     /**
@@ -640,17 +784,32 @@ public class UserService {
         League league = leagueRepository.findById(leagueId)
                 .orElseThrow(() -> new RuntimeException("Liga no encontrada"));
 
-        // 🔐 Validar que la liga pertenece al mismo ayuntamiento
-        authService.ensureSameAyuntamiento(league.getAyuntamiento());
+        boolean isCreator = league.getCreator() != null &&
+                league.getCreator().getId().equals(current.getId());
 
+        boolean isPlayer = league.getPlayers().stream()
+                .anyMatch(p -> p.getId().equals(current.getId()));
+
+        // Super Admin → acceso total
+        if (!authService.isSuperAdmin()) {
+
+            // Admin → debe estar en el mismo ayuntamiento que la liga
+            if (authService.isAdmin() || authService.isUser()) {
+                authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            }
+
+        }
+
+        // Usuarios del ayuntamiento de la liga
+        List<User> allUsers = userRepository.findByAyuntamientoId(
+                league.getAyuntamiento().getId()
+        );
+
+        // IDs ya dentro de la liga
         Set<Long> playerIdsInLeague = league.getPlayers()
                 .stream()
                 .map(User::getId)
                 .collect(Collectors.toSet());
-
-        List<User> allUsers = userRepository.findByAyuntamientoId(
-                league.getAyuntamiento().getId()
-        );
 
         return allUsers.stream()
                 .filter(u -> u.getStatus() == UserStatus.ACTIVE)
@@ -664,6 +823,7 @@ public class UserService {
                 ))
                 .toList();
     }
+
 
 
 
@@ -774,6 +934,106 @@ public class UserService {
         target.setProfileImageUrl(imageUrl);
         return userRepository.save(target);
     }
+
+    public List<PlayerSimpleDTO> getUsersIFollow() {
+
+        User current = authService.getCurrentUser();
+
+        Long currentUserId = current.getId();
+
+        // SUPERADMIN → puede ver todos los seguidos sin filtro
+        List<User> followedUsers;
+
+        if (authService.isSuperAdmin()) {
+
+            followedUsers = friendshipRepository.findAcceptedFriendIdsByUserId(currentUserId)
+                    .stream()
+                    .map(id -> userRepository.findById(id).orElse(null))
+                    .filter(Objects::nonNull)
+                    .toList();
+
+        } else {
+
+            // ADMIN / USER → filtrar por ayuntamiento
+            Long ayId = current.getAyuntamiento().getId();
+
+            followedUsers = friendshipRepository.findAcceptedFriendIdsByUserId(currentUserId)
+                    .stream()
+                    .map(id -> userRepository.findById(id).orElse(null))
+                    .filter(Objects::nonNull)
+                    .filter(u -> u.getAyuntamiento() != null &&
+                            u.getAyuntamiento().getId().equals(ayId))
+                    .toList();
+        }
+
+        return followedUsers.stream()
+                .map(u -> {
+                    PlayerSimpleDTO dto = new PlayerSimpleDTO();
+                    dto.setId(u.getId());
+                    dto.setUsername(u.getUsername());
+                    dto.setProfileImageUrl(u.getProfileImageUrl());
+                    return dto;
+                })
+                .toList();
+    }
+
+    public List<FollowerStatusDTO> getMyFollowers() {
+
+        User current = authService.getCurrentUser(); // solo yo puedo ver mis seguidores
+        Long myId = current.getId();
+
+        // 1️⃣ IDs de usuarios que me siguen (ACCEPTED)
+        List<Long> followerIds = friendshipRepository.findFollowersAccepted(myId);
+
+        // 2️⃣ Traemos los usuarios completos
+        List<User> followers = userRepository.findAllById(followerIds);
+
+        // 3️⃣ Convertimos a DTO con el ESTADO de mi relación hacia ellos
+        return followers.stream().map(follower -> {
+
+            FriendshipStatus s = friendshipRepository.findRelationshipStatus(myId, follower.getId());
+            String myStatus = (s != null) ? s.name() : "REJECTED";
+
+            FollowerStatusDTO dto = new FollowerStatusDTO();
+            dto.setId(follower.getId());
+            dto.setUsername(follower.getUsername());
+            dto.setProfileImageUrl(follower.getProfileImageUrl());
+            dto.setStatus(myStatus);
+
+            return dto;
+        }).toList();
+    }
+
+    public List<PlayerInfoDTO> getUsuariosQueYoHeBloqueado() {
+
+        User current = authService.getCurrentUser();
+
+        List<Block> blocks = blockRepository.findByBlockedByUser(current);
+
+        return blocks.stream()
+                .map(b -> toPlayerInfoDTO(b.getBlockedUser()))
+                .toList();
+    }
+
+    public List<InfoUserDTO> getUsuariosBloqueadosPorMiAyuntamiento() {
+
+        User current = authService.getCurrentUser();
+
+        if (!authService.isAdmin()) {
+            throw new AccessDeniedException("Solo un admin del ayuntamiento puede ver esta lista.");
+        }
+
+        Ayuntamiento ayto = current.getAyuntamiento();
+
+        List<Block> blocks = blockRepository.findByBlockedByAyuntamiento(ayto);
+
+        return blocks.stream()
+                .map(b -> toDTOinfo(b.getBlockedUser()))
+                .toList();
+    }
+
+
+
 
 
     public User findByUsername(String username) {

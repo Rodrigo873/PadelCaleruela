@@ -32,7 +32,7 @@ public class DataInitializer implements CommandLineRunner {
             User admin = new User();
             admin.setUsername("superadmin");
             admin.setFullName("Super Administrador Padel");
-            admin.setEmail("rodrigorinconparra@gmail.com");
+            admin.setEmail("boostplay4@gmail.com");
             // 🔤 Conjunto de caracteres válidos
             final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 

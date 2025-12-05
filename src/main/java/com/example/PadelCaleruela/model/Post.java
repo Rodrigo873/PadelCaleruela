@@ -3,6 +3,7 @@ package com.example.PadelCaleruela.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Entity
 @Data
@@ -30,6 +31,9 @@ public class Post {
     @ManyToOne
     @JoinColumn(name = "ayuntamiento_id")
     private Ayuntamiento ayuntamiento;
+
+    @OneToMany(mappedBy = "post", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Comment> comments;
 
 
     @PrePersist

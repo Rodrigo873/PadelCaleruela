@@ -99,7 +99,43 @@ public class EmailService {
             helper.setFrom(String.format("%s <%s>", fromName, from));
             helper.setTo(to);
             helper.setSubject(subject);
-            helper.setText(htmlContent, true);
+
+            // 🌟 URL DEL LOGO (como me diste)
+            String logoUrl = "http://192.168.1.62:8080/uploads/posts/2/b8321976-0677-408f-a041-7f69d06d5a21_LogoBoostPlay.jpg";
+
+            // ===============================
+            // ✨ TEMPLATE PROFESIONAL
+            // ===============================
+            String emailTemplate = """
+                <div style="font-family: Arial, Helvetica, sans-serif; background-color: #f6f8fb; padding: 30px;">
+                
+                    <div style="max-width: 600px; margin: auto; background: #ffffff; border-radius: 12px;
+                                box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden;">
+                                
+                        <!-- HEADER -->
+                        <div style="background: #111827; padding: 20px; text-align: center;">
+                            <img src="%s" alt="BoostPlay" style="max-height: 70px; border-radius: 8px;" />
+                        </div>
+
+                        <!-- CONTENT -->
+                        <div style="padding: 30px; font-size: 16px; color: #333;">
+                            %s
+                        </div>
+
+                        <!-- FOOTER -->
+                        <div style="background: #f1f5f9; padding: 20px; text-align: center; font-size: 13px; color: #6b7280;">
+                            <p style="margin: 0; font-weight: bold; color: #111827;">BoostPlay</p>
+                            <p style="margin: 5px 0;">El motor que impulsa tu comunidad deportiva.</p>
+                            <p style="margin: 5px 0;">📧 boostplay4@gmail.com</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin-top: 10px;">
+                                © %d BoostPlay. Todos los derechos reservados.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                """.formatted(logoUrl, htmlContent, java.time.Year.now().getValue());
+
+            helper.setText(emailTemplate, true);
 
             mailSender.send(mimeMessage);
 
@@ -110,4 +146,5 @@ public class EmailService {
             throw new RuntimeException("No se pudo enviar el correo HTML.");
         }
     }
+
 }

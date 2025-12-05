@@ -1,6 +1,6 @@
 package com.example.PadelCaleruela.service;
 
-import com.example.PadelCaleruela.security.CustomUserDetails;
+import com.example.PadelCaleruela.CustomUserDetails;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;

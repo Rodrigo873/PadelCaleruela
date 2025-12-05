@@ -3,6 +3,8 @@ package com.example.PadelCaleruela.controller;
 import com.example.PadelCaleruela.dto.*;
 import com.example.PadelCaleruela.model.Ayuntamiento;
 import com.example.PadelCaleruela.model.TarifaFranja;
+import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.service.AuthService;
 import com.example.PadelCaleruela.service.AyuntamientoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ import java.util.Map;
 public class AyuntamientoController {
 
     private final AyuntamientoService service;
+    private final AuthService authService;
 
     @GetMapping("/cp/{cp}")
     public ResponseEntity<?> getByCP(@PathVariable String cp) {
@@ -48,7 +51,8 @@ public class AyuntamientoController {
 
     @GetMapping("/simple")
     public ResponseEntity<?> getAyuntamientosSimple() {
-        return ResponseEntity.ok(service.getAyuntamientosSimple());
+        User current = authService.getCurrentUser();
+        return ResponseEntity.ok(service.getAyuntamientosSimple(current));
     }
 
 
@@ -61,6 +65,7 @@ public class AyuntamientoController {
 
 
     @GetMapping
+    @PreAuthorize("hasRole('SUPERADMIN')")
     public ResponseEntity<?> listarAyuntamientos() {
         return ResponseEntity.ok(service.listarAyuntamientos());
     }
@@ -77,6 +82,27 @@ public class AyuntamientoController {
     ) throws IOException {
         String imageUrl = service.uploadImage(id, image);
         return ResponseEntity.ok(Map.of("imageUrl", imageUrl));
+    }
+
+    // 🔹 Desactivar ayuntamiento (y mover usuarios al neutral)
+    @PatchMapping("/{id}/disable")
+    @PreAuthorize("hasRole('SUPERADMIN')")
+    public ResponseEntity<String> disableAyuntamiento(@PathVariable Long id) {
+        service.desactivarAyuntamiento(id);
+        return ResponseEntity.ok("Ayuntamiento desactivado y usuarios movidos al ayuntamiento neutral.");
+    }
+
+    // 🔹 Activar ayuntamiento
+    @PatchMapping("/{id}/enable")
+    @PreAuthorize("hasRole('SUPERADMIN')")
+    public ResponseEntity<String> enableAyuntamiento(@PathVariable Long id) {
+        service.activarAyuntamiento(id);
+        return ResponseEntity.ok("Ayuntamiento activado correctamente.");
+    }
+
+    @GetMapping("/basic/{id}")
+    public AyuntamientoBasicDTO getBasic(@PathVariable Long id) {
+        return service.getBasicInfo(id);
     }
 }
 

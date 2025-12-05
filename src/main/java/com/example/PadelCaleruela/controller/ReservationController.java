@@ -1,9 +1,9 @@
 package com.example.PadelCaleruela.controller;
 
-import com.example.PadelCaleruela.dto.HourSlotDTO;
-import com.example.PadelCaleruela.dto.InfoReservationDTO;
-import com.example.PadelCaleruela.dto.ReservationDTO;
-import com.example.PadelCaleruela.dto.ReservationPlayerDTO;
+import com.example.PadelCaleruela.dto.*;
+import com.example.PadelCaleruela.model.Reservation;
+import com.example.PadelCaleruela.model.User;
+import com.example.PadelCaleruela.repository.UserRepository;
 import com.example.PadelCaleruela.service.InvitationService;
 import com.example.PadelCaleruela.service.ReservationService;
 import org.springframework.http.ResponseEntity;
@@ -24,10 +24,13 @@ public class ReservationController {
 
     private final InvitationService invitationService;
 
+    private final UserRepository userRepository;
 
-    public ReservationController(ReservationService service,InvitationService invitationService) {
+
+    public ReservationController(ReservationService service,InvitationService invitationService,UserRepository userRepository) {
         this.reservationService = service;
         this.invitationService=invitationService;
+        this.userRepository=userRepository;
     }
 
     // Crear reserva
@@ -111,7 +114,7 @@ public class ReservationController {
 
 
     @GetMapping("/user/{userId}")
-    public List<ReservationDTO> getReservationsByUserAndStatus(
+    public List<ReservationWithPistaDTO> getReservationsByUserAndStatus(
             @PathVariable Long userId,
             @RequestParam(required = false) String status
     ) {
@@ -173,6 +176,44 @@ public class ReservationController {
         return ResponseEntity.ok(pendientes);
     }
 
+
+    @GetMapping("/{reservaId}/pista")
+    public ResponseEntity<?> getPistaDeReserva(
+            @PathVariable Long reservaId,
+            @RequestParam Long userId) {
+
+        System.out.println("🔍 Controller: solicitando pista de reserva " + reservaId + " por user " + userId);
+
+        return ResponseEntity.ok(
+                reservationService.getPistaVisibleParaUsuario(reservaId, userId)
+        );
+    }
+
+    @GetMapping("/admin/last-confirmed")
+    public ResponseEntity<List<ReservationSummaryDTO>> getLastConfirmedForAdmin() {
+        return ResponseEntity.ok(reservationService.getLast10ConfirmedReservationsForAyuntamiento());
+    }
+
+
+    @DeleteMapping("/{reservationId}/kick/{userId}")
+    public ResponseEntity<?> kickPlayer(
+            @PathVariable Long reservationId,
+            @PathVariable Long userId,
+            Principal principal) {
+
+        try {
+            String result = reservationService.kickPlayerFromReservation(
+                    reservationId,
+                    userId,
+                    principal.getName()
+            );
+
+            return ResponseEntity.ok().build();
+
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
 
 
 }

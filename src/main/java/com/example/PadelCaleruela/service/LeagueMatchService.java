@@ -173,30 +173,29 @@ public class LeagueMatchService {
                 .toList();
     }
 
-    // ✅ Actualizar resultado + ranking (solo creador de liga, ADMIN o SUPERADMIN)
+    // ✅ Actualizar resultado + ranking ()
     @Transactional
     public Map<String, Object> updateResultAndRanking(
             Long matchId,
-            List<Map<String, Integer>> sets // [{team1Games, team2Games}, ...]
+            List<Map<String, Integer>> sets
     ) {
         LeagueMatch match = matchRepository.findById(matchId)
                 .orElseThrow(() -> new RuntimeException("Match not found"));
 
-        League league = match.getLeague();
         User current = authService.getCurrentUser();
+        // ======================================================
+        // 🔐 AUTORIZACIÓN
+        // ======================================================
 
-        // === ⚠️ AUTORIZACIÓN ===
-
-        // SUPERADMIN → permitido siempre
         if (!authService.isSuperAdmin()) {
 
-            // ADMIN → solo si pertenece al mismo ayuntamiento
-            if (authService.isAdmin()) {
-                authService.ensureSameAyuntamiento(league.getAyuntamiento());
-            }
+            // ADMIN → mismo ayuntamiento
+            //if (authService.isAdmin()) {
+              //  authService.ensureSameAyuntamiento(league.getAyuntamiento());
+            //}
 
-            // USER → solo si pertenece al PARTIDO
-            if (authService.isUser()) {
+            // USER → solo si juega el partido
+            if (authService.isUser() || authService.isAdmin()) {
 
                 boolean isInTeam1 = match.getTeam1().getPlayers()
                         .stream()
@@ -208,11 +207,15 @@ public class LeagueMatchService {
 
                 if (!isInTeam1 && !isInTeam2) {
                     throw new AccessDeniedException(
-                            "No puedes modificar resultados de un partido en el que no estás inscrito."
+                            "No puedes modificar el resultado porque no participas en este partido."
                     );
                 }
             }
         }
+
+        // ======================================================
+        // 🛠️ ACTUALIZACIÓN DE RESULTADOS
+        // ======================================================
 
         LeagueTeam team1 = match.getTeam1();
         LeagueTeam team2 = match.getTeam2();
@@ -229,39 +232,46 @@ public class LeagueMatchService {
         int setNumber = 1;
 
         for (Map<String, Integer> setData : sets) {
-            Integer team1Games = setData.get("team1Games");
-            Integer team2Games = setData.get("team2Games");
-            if (team1Games == null || team2Games == null) continue;
+            Integer t1 = setData.get("team1Games");
+            Integer t2 = setData.get("team2Games");
+
+            if (t1 == null || t2 == null) continue;
 
             LeagueMatchSet set = new LeagueMatchSet();
             set.setMatch(match);
             set.setSetNumber(setNumber++);
-            set.setTeam1Games(team1Games);
-            set.setTeam2Games(team2Games);
+            set.setTeam1Games(t1);
+            set.setTeam2Games(t2);
+
             match.getSets().add(set);
 
-            if (team1Games > team2Games) team1SetsWon++;
-            else if (team2Games > team1Games) team2SetsWon++;
+            if (t1 > t2) team1SetsWon++;
+            else if (t2 > t1) team2SetsWon++;
         }
 
         match.setTeam1Score(team1SetsWon);
         match.setTeam2Score(team2SetsWon);
         match.setStatus(MatchStatus.FINISHED);
         match.setPlayedDate(LocalDateTime.now());
+
         matchRepository.save(match);
 
-        // 🧮 Actualiza ranking
+        // 🔢 Actualizar ranking
         List<LeagueTeamRankingViewDTO> updatedRanking =
-                teamRankingService.updateAfterMatch(matchId, team1, team2, team1SetsWon, team2SetsWon);
+                teamRankingService.updateAfterMatch(
+                        matchId, team1, team2, team1SetsWon, team2SetsWon
+                );
 
-        // ✅ Revisa si la liga ha terminado
+        // 🏁 ¿La liga terminó?
         checkAndFinalizeLeague(match.getLeague());
 
         Map<String, Object> response = new HashMap<>();
         response.put("match", mapToViewDto(match));
         response.put("ranking", updatedRanking);
+        System.out.println("LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"+response);
         return response;
     }
+
 
     @Transactional
     private void checkAndFinalizeLeague(League league) {

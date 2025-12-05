@@ -3,9 +3,7 @@ package com.example.PadelCaleruela.service;
 import com.example.PadelCaleruela.AppProperties;
 import com.example.PadelCaleruela.dto.PostDTO;
 import com.example.PadelCaleruela.model.*;
-import com.example.PadelCaleruela.repository.PostRepository;
-import com.example.PadelCaleruela.repository.UserRepository;
-import com.example.PadelCaleruela.repository.UserSeenPostRepository;
+import com.example.PadelCaleruela.repository.*;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import org.springframework.security.access.AccessDeniedException;
@@ -19,8 +17,10 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class PostService {
@@ -32,16 +32,27 @@ public class PostService {
 
     private final UserSeenPostRepository userSeenPostRepository;
 
+    private final BlockRepository blockRepository;
+    private final LikeRepository likeRepository;
+    private  final AuthService authService;
+
     public PostService(PostRepository repo,
                        UserRepository userRepository,
                        UserService userService,
                        AppProperties appProperties,
-                       UserSeenPostRepository userSeenPostRepository) {
+                       UserSeenPostRepository userSeenPostRepository,
+                       BlockRepository blockRepository,
+                       LikeRepository likeRepository,
+                       AuthService authService
+    ) {
         this.postRepository = repo;
         this.userRepository = userRepository;
         this.userService = userService;
         this.appProperties=appProperties;
         this.userSeenPostRepository=userSeenPostRepository;
+        this.blockRepository=blockRepository;
+        this.likeRepository=likeRepository;
+        this.authService=authService;
     }
 
     // 🔹 Feed personalizado para el usuario autenticado
@@ -49,26 +60,34 @@ public class PostService {
     //    - Sus propios posts (incluye PRIVATE)
     //    - Posts PUBLIC de su ayuntamiento
     public List<PostDTO> getFeed(User currentUser) {
+
         Long userId = currentUser.getId();
-        List<Post> posts = postRepository.findFeedForUser(userId);
+        LocalDateTime minDate = LocalDateTime.now().minusHours(24);
 
-        return posts.stream()
-                .filter(p -> {
-                    boolean following = userService.isFollowing(userId, p.getUser().getId());
+        // Posts de personas que sigo
+        List<Post> posts = postRepository.findRecentFeedForUser(userId, minDate);
 
-                    if (following) return true; // puedo ver TODO de quien sigo
+        // Mis propios posts (solo FRIENDS o PUBLIC)
+        List<Post> misPosts = postRepository
+                .findByUserIdAndCreatedAtGreaterThanEqual(userId, minDate)
+                .stream()
+                .filter(p ->p.getVisibility() == Visibility.FRIENDS)
+                .toList();
 
-                    // si no sigo → solo públicos y de mi ayto
-                    return p.getVisibility() == Visibility.PUBLIC
-                            && Objects.equals(
-                            currentUser.getAyuntamiento().getId(),
-                            p.getAyuntamiento().getId()
-                    );
-                })
-                .filter(p -> !userSeenPostRepository.existsByUserIdAndPostId(userId, p.getId())) // 👈 evitar repetidos
+        // Mezclamos feed + mis posts sin duplicados
+        List<Post> combinados = Stream.concat(posts.stream(), misPosts.stream())
+                .distinct()
+                .toList();
+
+        return combinados.stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
+
+
+
+
+
 
 
     // 🔹 Feed de otro usuario (solo para SuperAdmin)
@@ -85,28 +104,61 @@ public class PostService {
     // 🔹 Feed público: posts PUBLIC del ayuntamiento del usuario
     public List<PostDTO> getPublicFeed(User currentUser) {
 
-        Ayuntamiento ayuntamiento = currentUser.getAyuntamiento();
+        Ayuntamiento ayto = currentUser.getAyuntamiento();
         Long userId = currentUser.getId();
 
-        if (ayuntamiento == null) {
-            return List.of(); // Un usuario sin ayuntamiento no debería ver ningún post público
-        }
+        if (ayto == null) return List.of();
 
-        // Obtener solo posts PUBLIC
-        List<Post> posts = postRepository.findByVisibility(Visibility.PUBLIC);
+        Long ayId = ayto.getId();
+        LocalDateTime minDate = LocalDateTime.now().minusHours(24);
 
+        // 1️⃣ Traemos tus posts (siempre)
+        List<Post> misPosts = postRepository
+                .findByUserIdAndCreatedAtGreaterThanEqual(userId, minDate)
+                .stream()
+                .filter(p -> p.getVisibility() == Visibility.PUBLIC)
+                .toList();
+
+        // 2️⃣ Traemos los demás posts públicos no seguidos
+        List<Post> otros = postRepository.findRecentPublicPostsNotFollowed(
+                userId, ayId, minDate
+        );
+
+        // 3️⃣ Unimos ambas listas
+        List<Post> posts = Stream.concat(misPosts.stream(), otros.stream())
+                .distinct()
+                .toList();
+
+        // === Bloqueos ===
+        Set<Long> yoBloqueo = blockRepository.findByBlockedByUser(currentUser)
+                .stream().map(b -> b.getBlockedUser().getId()).collect(Collectors.toSet());
+
+        Set<Long> meBloquearon = blockRepository.findByBlockedUser(currentUser)
+                .stream().filter(b -> b.getBlockedByUser() != null)
+                .map(b -> b.getBlockedByUser().getId()).collect(Collectors.toSet());
+
+        Set<Long> aytoBloquea = blockRepository.findByBlockedByAyuntamiento(ayto)
+                .stream().map(b -> b.getBlockedUser().getId()).collect(Collectors.toSet());
+
+        Set<Long> aytosQueMeBloquearon = blockRepository.findByBlockedUser(currentUser)
+                .stream().filter(b -> b.getBlockedByAyuntamiento() != null)
+                .map(b -> b.getBlockedByAyuntamiento().getId()).collect(Collectors.toSet());
+
+        // === Filtrado final ===
         return posts.stream()
-                // ➤ Solo los del mismo ayuntamiento
-                .filter(p -> p.getAyuntamiento() != null
-                        && p.getAyuntamiento().getId().equals(ayuntamiento.getId()))
-
-                // ➤ Evitar posts repetidos (ya vistos)
-                .filter(p -> !userSeenPostRepository.existsByUserIdAndPostId(userId, p.getId()))
-
-                // ➤ Convertir a DTO
+                .filter(p -> p.getVisibility() == Visibility.PUBLIC ||
+                        p.getUser().getId().equals(userId)) // 🔥 Tus posts siempre entran
+                .filter(p -> !yoBloqueo.contains(p.getUser().getId()))
+                .filter(p -> !meBloquearon.contains(p.getUser().getId()))
+                .filter(p -> !aytoBloquea.contains(p.getUser().getId()))
+                .filter(p -> !aytosQueMeBloquearon.contains(ayId))
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
+
+
+
+
 
     /** 👉 Registrar que un post fue visto */
     public void markAsSeen(Long userId, Long postId) {
@@ -293,6 +345,26 @@ public class PostService {
         postRepository.delete(post);
     }
 
+    @Transactional
+    public PostDTO updatePostVisibility(Long postId, Visibility visibility, User currentUser) {
+
+        Post post = postRepository.findById(postId)
+                .orElseThrow(() -> new RuntimeException("Post no encontrado."));
+
+        // 🔒 Solo el dueño del post o SuperAdmin pueden cambiar visibilidad
+        if (!currentUser.getId().equals(post.getUser().getId()) && !isSuperAdmin(currentUser)) {
+            throw new AccessDeniedException("No tienes permiso para modificar la visibilidad de este post.");
+        }
+
+        // Actualizamos únicamente la visibilidad
+        post.setVisibility(visibility);
+
+        // Guardamos y devolvemos DTO
+        Post saved = postRepository.save(post);
+        return convertToDTO(saved);
+    }
+
+
     // 🔹 Conversión entidad → DTO
     private PostDTO convertToDTO(Post post) {
         PostDTO dto = new PostDTO();
@@ -304,15 +376,20 @@ public class PostService {
         dto.setVisibility(post.getVisibility());
         dto.setCreatedAt(post.getCreatedAt());
         dto.setImageUrl(post.getImageUrl());
-        // 🔥 Añadimos datos del usuario
-        User u = post.getUser();
-        dto.setUsername(u.getUsername());
+        dto.setUsername(post.getUser().getUsername());
+        dto.setUserImageUrl(post.getUser().getProfileImageUrl());
 
-        // Si no tienes un campo imageUrl en User, aquí pones null
-        dto.setUserImageUrl(u.getProfileImageUrl() != null ? u.getProfileImageUrl() : null);
+        // 🔥 Añadimos likes
+        long likes = likeRepository.countByPost(post);
+        dto.setLikesCount(likes);
+
+        User current = authService.getCurrentUser();
+        boolean liked = likeRepository.existsByUserAndPost(current, post);
+        dto.setLikedByCurrentUser(liked);
 
         return dto;
     }
+
 
 
     // ==========================================

@@ -1,6 +1,7 @@
 package com.example.PadelCaleruela.repository;
 
 import com.example.PadelCaleruela.model.Friendship;
+import com.example.PadelCaleruela.model.FriendshipStatus;
 import com.example.PadelCaleruela.model.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -78,6 +79,25 @@ public interface FriendshipRepository extends JpaRepository<Friendship,Long> {
     @Query("SELECT f.friend FROM Friendship f WHERE f.user.id = :userId AND f.status = 'ACCEPTED'")
     List<User> findFollowingByUserId(Long userId);
 
+
+    @Query("SELECT f.user.id FROM Friendship f WHERE f.friend.id = :userId AND f.status = 'ACCEPTED'")
+    List<Long> findFollowersAccepted(@Param("userId") Long userId);
+
+    @Query("SELECT f.status FROM Friendship f WHERE f.user.id = :userId AND f.friend.id = :targetId")
+    FriendshipStatus findRelationshipStatus(@Param("userId") Long userId, @Param("targetId") Long targetId);
+
+    @Query("""
+    SELECT COUNT(f) > 0 
+    FROM Friendship f 
+    WHERE 
+        (
+            (f.user.id = :viewerId AND f.friend.id = :ownerId) 
+            OR 
+            (f.user.id = :ownerId AND f.friend.id = :viewerId)
+        )
+        AND f.status = 'ACCEPTED'
+""")
+    boolean existsByUsersAndStatusAccepted(Long viewerId, Long ownerId);
 
 
 }
